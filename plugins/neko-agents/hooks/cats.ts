@@ -69,7 +69,28 @@ const COATS = {
   brown: [BROWN, BROWN, BROWN],
 } as const satisfies Record<string, Coat>
 
-const RANDOM_COATS: readonly [Coat, ...Coat[]] = [
+/** 名前ごとの毛色。名前で決めるので「シロなのに三毛」にならず、どのタブでもビューアでも同じ猫は同じ色 */
+const COAT_OF_NAME: Record<(typeof NAMES)[number], Coat> = {
+  タマ: COATS.white,
+  ミケ: COATS.calico,
+  クロ: COATS.black,
+  シロ: COATS.white,
+  トラ: COATS.tabby,
+  ハチ: COATS.tuxedo,
+  モモ: COATS.calico,
+  ソラ: COATS.gray,
+  コテツ: COATS.tabby,
+  きなこ: COATS.brown,
+  あずき: COATS.black,
+  ムギ: COATS.brown,
+  レオ: COATS.tabby,
+  チャチャ: COATS.brown,
+  ココ: COATS.tuxedo,
+  マル: COATS.gray,
+}
+
+/** 名前の一覧に無い猫（古い部屋のファイルなど）の毛色 */
+const OTHER_COATS: readonly [Coat, ...Coat[]] = [
   COATS.tabby,
   COATS.white,
   COATS.black,
@@ -79,18 +100,11 @@ const RANDOM_COATS: readonly [Coat, ...Coat[]] = [
   COATS.brown,
 ]
 
-export function coatOf(cat: Pick<Cat, 'id' | 'type'>): Coat {
+export function coatOf(cat: Pick<Cat, 'id' | 'type' | 'name'>): Coat {
   // ボスはどのタブでも茶トラ（ほかのタブのボスは id が「セッション/main」になるので種類で見る）
   if (cat.type === 'main') return COATS.tabby
-  switch (cat.type) {
-    case 'Explore':
-      return COATS.white
-    case 'Plan':
-      return COATS.calico
-    case 'general-purpose':
-      return COATS.black
-  }
-  return cycle(RANDOM_COATS, hash(cat.id))
+  const byName: Partial<Record<string, Coat>> = COAT_OF_NAME
+  return byName[cat.name] ?? cycle(OTHER_COATS, hash(cat.name))
 }
 
 export const ENDED: readonly CatStatus[] = ['completed', 'failed', 'killed']

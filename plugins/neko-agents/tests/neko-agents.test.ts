@@ -6,6 +6,7 @@ import {
   advanceTrip,
   CHAT_EVERY_MS,
   chatter,
+  coatOf,
   cycle,
   LINES,
   newBoss,
@@ -712,6 +713,17 @@ describe('純粋なロジック', () => {
     )
     // 今どのツールを使っているかは渡さない
     expect(digest).not.toContain('Grep')
+  })
+
+  test('毛色は名前で決まり、種類や id では変わらない。ボスは茶トラ', () => {
+    const white = coatOf({ id: 'a', type: 'stray', name: 'シロ' })
+    expect(white).toEqual(coatOf({ id: 'sess/b', type: 'Plan', name: 'シロ' }))
+    expect(new Set(white).size).toBe(1)
+    expect(coatOf({ id: 'c', type: 'Explore', name: 'ミケ' })).toEqual(['#e0913a', '#eeeeee', '#8a8a8a'])
+    expect(coatOf({ id: 'd', type: 'Explore', name: 'クロ' })).toEqual(['#8a8a8a', '#8a8a8a', '#8a8a8a'])
+    expect(coatOf(newBoss(0))).toEqual(['#e0913a', '#e0913a', '#e0913a'])
+    // 一覧に無い名前でも、同じ名前なら同じ色
+    expect(coatOf({ id: 'e', type: 'x', name: 'ポチ' })).toEqual(coatOf({ id: 'f', type: 'y', name: 'ポチ' }))
   })
 
   test('cycle は範囲外の番号を折り返す', () => {

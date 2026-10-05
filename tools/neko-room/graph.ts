@@ -88,6 +88,8 @@ const LINE: Style = { color: '#7a7a7a' }
 const SPEECH = '#f0c674'
 const SELECTED = '#5fd7ff'
 const ALERT = '#ff5f5f'
+/** 子猫の箱の枠。色は猫の絵だけで出し、枠はどの子猫も同じ灰色（誰かは名前で分かる）。ボスの枠だけは毛色にして目立たせる */
+const BORDER = '#9e9e9e'
 
 /** 1 マス。ch が空文字のマスは全角文字の右半分 */
 type Cell = { ch: string; style: Style }
@@ -430,7 +432,7 @@ export function draw(lay: Layout, content: (cat: Cat) => BoxContent, walkers: re
         ? { color: ALERT, bold: true }
         : c.highlight === 'selected'
           ? { color: SELECTED, bold: true }
-          : { color: c.coat[0], dim: ended }
+          : { color: isBoss(cat) ? c.coat[0] : BORDER, dim: ended }
     const center = centerOf(placed, box)
     const top = `╭${'─'.repeat(box - 2)}╮`
     const bottom = `╰${'─'.repeat(box - 2)}╯`
