@@ -120,3 +120,9 @@ Mod の型チェックには、一度読み込んだときに `plugins/<mod>/.cl
 claude plugin marketplace add ~/ghq/github.com/Tora29/my-claude-tools
 claude plugin install neko-agents@my-claude-tools
 ```
+
+## ライセンス
+
+[MIT](LICENSE) © Tora29
+
+neko-agents の質問の解説は、[qa-guide](https://github.com/aieo-product/claude_qamods)（MIT License、© aieo-product）を元にしています。著作権表示と許諾文は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) にあります。
