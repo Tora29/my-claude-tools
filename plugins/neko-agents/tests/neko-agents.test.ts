@@ -15,6 +15,15 @@ import {
   startTrip,
 } from '../hooks/cats'
 import { batonsFor } from '../hooks/links'
+import {
+  answersOf,
+  contextOf,
+  EXPLAIN_SYSTEM,
+  FREEFORM,
+  kittenDigest,
+  splitAnswers,
+  toQuestions,
+} from '../hooks/questions'
 import { parseRoom } from '../hooks/rooms'
 import type { Cat, Room } from '../types'
 
@@ -44,6 +53,8 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
     summaries: 0,
     /** haiku に渡した文章（新しいものが後ろ） */
     prompts: [] as string[],
+    /** haiku に渡した system（prompts と同じ並び） */
+    systems: [] as string[],
     /** メモリ上のファイル：パス → 中身と更新時刻 */
     files: new Map<string, { text: string; mtimeMs: number }>(),
     writes: 0,
@@ -63,6 +74,17 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
   })
   on('tool.call', (_$, e) => toolCall(e))
   on('classic.PermissionRequest', () => ({}))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('session.messages', () => ({
+    value: [
+      { role: 'user', text: 'ログイン画面を作って', toolUses: [] },
+      {
+        role: 'assistant',
+        text: '方式を決めたいので確認します',
+        toolUses: [{ tool_use_id: 'toolu-read', tool: 'Read', input: { file_path: '/src/login.ts' } }],
+      },
+    ],
+  }))
   on('fs.write', (_$, e) => {
     world.writes++
     world.files.set(e.path, { text: e.text, mtimeMs: clock.now() })
@@ -75,6 +97,7 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
   on('model.complete', (_$, e) => {
     world.summaries++
     world.prompts.push(e.prompt)
+    world.systems.push(e.system ?? '')
     const usage = { input_tokens: 300, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { value: { isAnswered: true as const, text: world.summary, usage } }
   })
@@ -407,6 +430,35 @@ describe('要約', () => {
     expect(last).not.toContain('：old')
   })
 
+  test('裏で動いた子猫の完了通知で始まるターンは、同じ作業の続きとみなしてまとめる', async ($, on) => {
+    const { clock, world, published } = engine(on)
+    await start($)
+    await $.prompt.submit({ text: '調べて', wait: false, origin: { kind: 'composer' } })
+    await bossTurn($, 'turn-1', '調べて', () => spawn($, 'bg', 'Explore'))
+    const taskAt = catOf(await published(), 'main')?.taskAt
+    await finishSubagent($, 'agent-bg', 'answer', '裏の結果')
+    // 完了通知はユーザーの入力ではない（本文はあるが origin で見分ける）
+    await $.prompt.submit({ text: '<agent-message> 報告', wait: false, origin: { kind: 'task-notification' } })
+    await bossTurn($, 'turn-2', '<agent-message> 報告')
+    await clock.advance(1000)
+    expect(catOf(await published(), 'main')?.taskAt).toBe(taskAt)
+    expect(world.prompts.at(-1)).toContain('：bg')
+  })
+
+  test('裏で動いた子猫は、SubagentHandback で渡した報告を結果として要約する', async ($, on) => {
+    const { clock, world, published } = engine(on)
+    await start($)
+    await spawn($, 'bg', 'Explore')
+    // agentId はエンジンが付けるもので、SubagentHandback は $.tool.call の引数の型には無い
+    const handback = { tool: 'SubagentHandback', agentId: 'agent-bg', message: 'useAuth が 2 つあった' }
+    await $.tool.call(handback as unknown as Parameters<typeof $.tool.call>[0])
+    // 裏で動いた子猫の turn.complete は answer が空で届く
+    await finishSubagent($, 'agent-bg', 'answer', '')
+    await clock.settle()
+    expect(world.prompts.at(-1)).toBe('useAuth が 2 つあった')
+    expect(catOf(await published(), 'agent-bg')?.summary).toBe('調べ終わったニャ')
+  })
+
   test('要約をオフにすると haiku を呼ばない', { options: { summarize: false } }, async ($, on) => {
     const { clock, world, published } = engine(on)
     await start($)
@@ -420,6 +472,187 @@ describe('要約', () => {
   })
 })
 
+const QUESTION = {
+  question: 'どの方式でログインを作りますか？',
+  header: '方式',
+  multiSelect: false,
+  options: [
+    { label: 'OAuth', description: '外部のアカウントで入る' },
+    { label: 'パスワード', description: '自前で持つ' },
+  ],
+}
+
+/** AskUserQuestion の答え方。answer を渡せばその答え、undefined なら答えずに閉じる */
+function answering(answer: string | undefined): ToolHook {
+  return e =>
+    e.tool !== 'AskUserQuestion'
+      ? { result: 'ok' }
+      : answer === undefined
+        ? { result: 'closed', isError: true }
+        : { result: { questions: [QUESTION], answers: { [QUESTION.question]: answer } } }
+}
+
+const askOf = (room: Room) => room.asks?.at(-1)
+
+describe('質問', () => {
+  test('質問した猫がしゃべり、質問・猫口調の解説・答えを部屋に残す', async ($, on) => {
+    let release: (() => void) | undefined
+    const { clock, world, published } = engine(on, e =>
+      e.tool === 'AskUserQuestion'
+        ? new Promise(resolve => {
+            release = () => {
+              resolve({ result: { questions: [QUESTION], answers: { [QUESTION.question]: 'OAuth' } } })
+            }
+          })
+        : { result: 'ok' },
+    )
+    world.summary = '### いまの指示\nログイン画面を作ってるニャ'
+    await start($)
+    await $.prompt.submit({ text: 'ログイン画面を作って', wait: false, origin: { kind: 'composer' } })
+    await $.turn.start({ text: 'ログイン画面を作って', turnId: 'turn-1' })
+    const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    await clock.settle()
+
+    const asking = await published()
+    expect(askOf(asking)).toMatchObject({ id: 'toolu-ask', catId: 'main', status: 'open', explain: 'done' })
+    expect(askOf(asking)?.questions[0]?.options.map(o => o.label)).toEqual(['OAuth', 'パスワード'])
+    expect(askOf(asking)?.explanation).toBe('### いまの指示\nログイン画面を作ってるニャ')
+    expect(LINES.question.some(line => line === catOf(asking, 'main')?.say?.text)).toBe(true)
+    // 「聞きたいニャ」は答えるまで出し続ける（しばらくたっても、ひとりごとで上書きしない）
+    await clock.advance(5 * 60_000)
+    const waiting = catOf(await published(), 'main')
+    expect(LINES.question.some(line => waiting && line === speechOf(waiting, clock.now()))).toBe(true)
+    expect(catOf(asking, 'main')?.current).toBe('質問「方式」')
+    // 解説の材料：猫口調の指示、ユーザーの入力、直前の Claude の説明、質問
+    expect(world.systems.at(-1)).toBe(EXPLAIN_SYSTEM)
+    expect(world.prompts.at(-1)).toContain('ログイン画面を作って')
+    expect(world.prompts.at(-1)).toContain('方式を決めたいので確認します')
+    expect(world.prompts.at(-1)).toContain('パスワード')
+
+    release?.()
+    await call
+    const answered = await published()
+    expect(askOf(answered)).toMatchObject({ status: 'answered', answers: { [QUESTION.question]: 'OAuth' } })
+    expect(catOf(answered, 'main')?.say?.text).toBe('「OAuth」にするニャ！')
+  })
+
+  test('答えずに閉じたらキャンセルにする', async ($, on) => {
+    const { published } = engine(on, answering(undefined))
+    await start($)
+    await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    const room = await published()
+    expect(askOf(room)).toMatchObject({ status: 'cancelled', answers: {} })
+    expect(catOf(room, 'main')?.say).toBeUndefined()
+  })
+
+  test('子猫の質問は子猫のものとして残し、質問は 10 件まで', async ($, on) => {
+    const { published } = engine(on, answering('パスワード'))
+    await start($)
+    await spawn($, 'ask', 'general-purpose')
+    for (let i = 0; i < 12; i++) {
+      // agentId はエンジンが付けるもので、$.tool.call の引数の型には無い
+      const input = {
+        tool: 'AskUserQuestion' as const,
+        tool_use_id: `toolu-${i}`,
+        agentId: 'agent-ask',
+        questions: [QUESTION],
+      }
+      await $.tool.call(input)
+    }
+    const room = await published()
+    expect(room.asks?.length).toBe(10)
+    expect(room.asks?.[0]?.id).toBe('toolu-2')
+    expect(askOf(room)).toMatchObject({ catId: 'agent-ask', status: 'answered' })
+  })
+
+  test('質問のダイアログは許可待ちにしない', async ($, on) => {
+    const { published } = engine(on, answering('OAuth'))
+    await start($)
+    await $.classic.PermissionRequest({ tool_name: 'AskUserQuestion', tool_input: { questions: [QUESTION] } })
+    expect(catOf(await published(), 'main')?.asking).toBeUndefined()
+  })
+
+  test('/clear で質問の記録も消える', async ($, on) => {
+    const { published } = engine(on, answering('OAuth'))
+    await start($)
+    await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    await published()
+    await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } })
+    expect((await published()).asks).toBeUndefined()
+  })
+
+  test('解説の材料に、今の作業の子猫の結果と、まだ作業中の子猫を渡す', async ($, on) => {
+    const { clock, world, published } = engine(on, answering('OAuth'))
+    await start($)
+    await $.turn.start({ text: 'ログイン画面を作って', turnId: 'turn-1' })
+    await spawn($, 'useAuth の調査', 'Explore')
+    await spawn($, 'API の調査', 'Explore')
+    await finishSubagent($, 'agent-useAuth の調査', 'answer', 'useAuth が 2 か所で定義されていた')
+    await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    await clock.settle()
+    const room = await published()
+    const prompt = world.prompts[world.systems.lastIndexOf(EXPLAIN_SYSTEM)] ?? ''
+    const done = catOf(room, 'agent-useAuth の調査')?.name ?? '?'
+    const running = catOf(room, 'agent-API の調査')?.name ?? '?'
+    expect(prompt).toContain(`${done}（Explore）：useAuth の調査\n  結果：useAuth が 2 か所で定義されていた`)
+    expect(prompt).toContain(`${running}（Explore）：API の調査 → まだ作業中`)
+  })
+
+  test('回答待ちの間に子猫が終わったら、続けて終わった分をまとめて 1 回だけ解説を作り直す', async ($, on) => {
+    let release: (() => void) | undefined
+    const { clock, world, published } = engine(on, e =>
+      e.tool === 'AskUserQuestion'
+        ? new Promise(resolve => {
+            release = () => {
+              resolve({ result: { questions: [QUESTION], answers: { [QUESTION.question]: 'OAuth' } } })
+            }
+          })
+        : { result: 'ok' },
+    )
+    const explains = () => world.systems.filter(system => system === EXPLAIN_SYSTEM).length
+    world.summary = '最初の解説ニャ'
+    await start($)
+    await $.turn.start({ text: 'ログイン画面を作って', turnId: 'turn-1' })
+    await spawn($, 'a', 'Explore')
+    await spawn($, 'b', 'Explore')
+    const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    await clock.settle()
+    expect(explains()).toBe(1)
+
+    world.summary = '考え直した解説ニャ'
+    await finishSubagent($, 'agent-a', 'answer', 'a の結果')
+    await clock.advance(1000)
+    await finishSubagent($, 'agent-b', 'answer', 'b の結果')
+    await clock.advance(1000)
+    // b が終わってからまだ 2 秒たっていないので、作り直していない
+    expect(explains()).toBe(1)
+    await clock.advance(1500)
+    expect(explains()).toBe(2)
+    const room = await published()
+    const names = ['agent-a', 'agent-b'].map(id => catOf(room, id)?.name)
+    expect(askOf(room)).toMatchObject({ explain: 'done', explanation: '考え直した解説ニャ', revisedFor: names })
+    const prompt = world.prompts[world.systems.lastIndexOf(EXPLAIN_SYSTEM)] ?? ''
+    expect(prompt).toContain('a の結果')
+    expect(prompt).toContain('b の結果')
+
+    release?.()
+    await call
+    // 答えたあとに子猫が終わっても、もう作り直さない
+    await spawn($, 'c', 'Explore')
+    await finishSubagent($, 'agent-c', 'answer', 'c の結果')
+    await clock.advance(3000)
+    expect(explains()).toBe(2)
+  })
+
+  test('解説をオフにすると haiku を呼ばない', { options: { explainQuestions: false } }, async ($, on) => {
+    const { world, published } = engine(on, answering('OAuth'))
+    await start($)
+    await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
+    expect(askOf(await published())?.explain).toBe('off')
+    expect(world.summaries).toBe(0)
+  })
+})
+
 describe('純粋なロジック', () => {
   const kitten = (id: string, extra: Partial<Cat> = {}): Cat => ({
     ...newBoss(0),
@@ -430,6 +663,56 @@ describe('純粋なロジック', () => {
     ...extra,
   })
   const tripOf = (list: Cat[], id: string) => list.find(cat => cat.id === id)?.trip
+
+  test('質問：引数と答えを取り出し、複数選択の答えを分ける', () => {
+    expect(toQuestions([{ question: 'Q?', options: [{ label: 'A' }], extra: 1 }, 'x'])).toEqual([
+      { question: 'Q?', multiSelect: false, options: [{ label: 'A' }] },
+      { question: '', multiSelect: false, options: [] },
+    ])
+    expect(answersOf({ answers: { 'Q?': 'A' }, response: '自分で書いた' })).toEqual({
+      'Q?': 'A',
+      [FREEFORM]: '自分で書いた',
+    })
+    expect(answersOf('closed')).toBeUndefined()
+    expect(splitAnswers('A, "B, C", "say ""hi"" now"')).toEqual(['A', 'B, C', 'say "hi" now'])
+  })
+
+  test('質問の材料は、最後のユーザーの入力より後の説明とツール操作', () => {
+    const context = contextOf([
+      { role: 'user', text: '前の指示', toolUses: [] },
+      { role: 'assistant', text: '前の説明', toolUses: [] },
+      { role: 'user', text: '今の指示', toolUses: [] },
+      { role: 'assistant', text: '今の説明', toolUses: [{ tool: 'Bash', input: { command: 'ls' } }] },
+      { role: 'user', text: '', toolUses: [], toolResults: [{}] },
+    ])
+    expect(context).toEqual({ lead: '今の説明', tools: ['Bash: ls'], prompts: ['前の指示', '今の指示'] })
+  })
+
+  test('子猫の作業の材料：終わった子猫は結果、動いている子猫は「まだ作業中」だけ', () => {
+    const kitten = (id: string, status: Cat['status']): Cat => ({
+      ...newBoss(0),
+      id,
+      name: id,
+      type: 'Explore',
+      description: `${id} の調査`,
+      status,
+      current: 'Grep "secret"',
+    })
+    const digest = kittenDigest(
+      [kitten('ソラ', 'completed'), kitten('クロ', 'running'), kitten('ハチ', 'failed'), kitten('モモ', 'killed')],
+      { ソラ: '見つけた' },
+    )
+    expect(digest).toBe(
+      [
+        '- ソラ（Explore）：ソラ の調査\n  結果：見つけた',
+        '- クロ（Explore）：クロ の調査 → まだ作業中',
+        '- ハチ（Explore）：ハチ の調査 → 失敗',
+        '- モモ（Explore）：モモ の調査 → 中断',
+      ].join('\n'),
+    )
+    // 今どのツールを使っているかは渡さない
+    expect(digest).not.toContain('Grep')
+  })
 
   test('cycle は範囲外の番号を折り返す', () => {
     expect(cycle(['a', 'b', 'c'], 4)).toBe('b')

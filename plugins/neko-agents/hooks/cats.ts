@@ -255,6 +255,12 @@ export function summarize(e: ToolArgs): string {
       const to = str(e.to)
       return to ? `${tool} → ${to}` : tool
     }
+    case 'AskUserQuestion': {
+      const first: unknown = Array.isArray(e.questions) ? e.questions[0] : undefined
+      const q = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : {}
+      const topic = str(q.header) ?? str(q.question)
+      return topic ? `質問「${truncate(topic, 30)}」` : '質問'
+    }
   }
   return tool
 }
@@ -455,7 +461,7 @@ export function advanceTrips(list: Cat[], t: number): Cat[] {
   })
 }
 
-function withoutSay(cat: Cat): Cat {
+export function withoutSay(cat: Cat): Cat {
   const { say: _say, ...rest } = cat
   return rest
 }
@@ -481,6 +487,7 @@ export const LINES = {
   long: ['めんどくさいニャ…', 'まだかかるニャ…', 'ねむくなってきたニャ…'],
   bored: ['ひまニャ…', 'みんながんばるニャ〜', 'zzz…ニャ'],
   asking: ['許可がほしいニャ…', 'これやっていいニャ？'],
+  question: ['ちょっと聞きたいニャ', '教えてほしいニャ？', 'どっちがいいニャ？'],
 } as const
 
 export type LineKind = keyof typeof LINES
@@ -503,6 +510,8 @@ export function withoutAsking(cat: Cat): Cat {
 
 /** 要約の吹き出しは少し長めに出す */
 export const SUMMARY_SAY_MS = 6000
+/** 質問の吹き出しは、答えるまで出し続ける（部屋のファイルに書くので Infinity の代わりに 1 日） */
+export const ASK_SAY_MS = 24 * 60 * 60_000
 
 /** モデルの返事を、吹き出しに入る 1 文に整える */
 export function cleanSummary(text: string): string {

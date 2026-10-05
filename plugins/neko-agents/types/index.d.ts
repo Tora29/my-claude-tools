@@ -74,6 +74,37 @@ export type Room = {
   closed?: boolean
   cats: Cat[]
   links: Link[]
+  /** 猫がユーザーにした質問（AskUserQuestion）。古い順 */
+  asks?: Ask[]
+}
+
+/** AskUserQuestion の質問 1 つ */
+export type Question = {
+  question: string
+  header?: string
+  multiSelect: boolean
+  options: { label: string; description?: string }[]
+}
+
+/**
+ * AskUserQuestion 1 回分。猫が質問して、ユーザーが答えるまで
+ * open: 回答待ち / answered: 答えた / cancelled: 答えずに閉じた・中断した
+ */
+export type Ask = {
+  /** tool_use_id */
+  id: string
+  /** 質問した猫の id */
+  catId: string
+  askedAt: number
+  questions: Question[]
+  status: 'open' | 'answered' | 'cancelled'
+  /** 質問文 → 回答（複数選択はカンマ区切り）。選ばずに書いた答えは FREEFORM のキー */
+  answers: Record<string, string>
+  /** 質問の解説を猫口調で（haiku）。off: 解説しない設定 */
+  explain: 'pending' | 'done' | 'error' | 'off'
+  explanation?: string
+  /** 回答待ちの間に報告が届いて、解説を作り直したときの子猫の名前 */
+  revisedFor?: string[]
 }
 
 export type Speech = { text: string; from: number; until: number }
@@ -93,6 +124,12 @@ declare module 'claude-code' {
       files: Record<string, string>
       /** 猫どうしの点線のつながり */
       links: Link[]
+      /** 猫がユーザーにした質問。古い順に ASKS_MAX 件まで */
+      asks: Ask[]
+      /** ユーザーが入力した最近のプロンプト。質問の解説の材料にする */
+      prompts: string[]
+      /** 子猫の id → 終わったときの結果の本文（先頭だけ）。質問の解説の材料にする。部屋のファイルには書かない */
+      reports: Record<string, string>
     }
   }
 }

@@ -5,12 +5,11 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { isBoss } from '../../plugins/neko-agents/hooks/cats'
 import { isLive, parseRoom, ROOMS_DIR, STALE_MS } from '../../plugins/neko-agents/hooks/rooms'
 import type { Room } from '../../plugins/neko-agents/types'
 import { paint, toAnsi } from './ansi'
 import { fit } from './graph'
-import { buildScene, headline, narrowLines, REPORT_COLOR, sections } from './view'
+import { askLines, buildScene, headline, narrowLines, REPORT_COLOR, reportedIn, reportLine, sections } from './view'
 
 /** 描き直しの間隔。Mod のパネルで猫が歩くときと同じ */
 const FRAME_MS = 200
@@ -39,8 +38,8 @@ export function loadRooms(dir: string, t: number): Room[] {
   return rooms.sort((a, b) => a.session.localeCompare(b.session))
 }
 
-/** 画面に出す全部の行（スクロール前）。色付き */
-export function frame(rooms: readonly Room[], t: number, width: number): string[] {
+/** 画面に出す全部の行（スクロール前）。色付き。history なら質問の記録を全部出す */
+export function frame(rooms: readonly Room[], t: number, width: number, history = false): string[] {
   const scene = buildScene({ mine: [], myLinks: [], others: rooms, t })
   // 文字の行は、色を付ける前に幅ちょうどに収める（図の行はもともと幅ちょうど）
   const lines = [paint(fit(`ねこ部屋 · ${headline(scene)}`, width), { bold: true })]
@@ -53,9 +52,19 @@ export function frame(rooms: readonly Room[], t: number, width: number): string[
     )
     return lines
   }
+  // 報告と質問は、そのタブの区画の中（図のすぐ下）に出す。key を省くと全タブ分
+  const below = (key?: string) => {
+    const reported = reportedIn(scene, key)
+    const report = reported ? [paint(fit(reportLine(reported), width), { color: REPORT_COLOR })] : []
+    const questions = askLines(scene, width, history, key).map(line =>
+      paint(fit(line.text, width), { color: line.color, bold: line.bold, dim: line.dim }),
+    )
+    return [...report, ...questions]
+  }
   if (width < NARROW) {
     for (const line of narrowLines(scene))
       lines.push(paint(fit(line.text, width), { color: line.color, dim: line.dim }))
+    lines.push(...below())
     return lines
   }
   // 同じプロジェクトのタブが複数あるときは、セッション id の頭で見分ける
@@ -66,11 +75,7 @@ export function frame(rooms: readonly Room[], t: number, width: number): string[
   for (const group of groups) {
     if (groups.length > 1) lines.push(paint(group.title, { dim: true }))
     for (const runs of group.rows) lines.push(toAnsi(runs))
-  }
-  const { reported } = scene
-  if (reported) {
-    const label = isBoss(reported) ? 'まとめ' : '報告'
-    lines.push(paint(fit(`${reported.name}の${label}：${reported.summary}`, width), { color: REPORT_COLOR }))
+    lines.push(...below(group.key))
   }
   return lines
 }
@@ -81,6 +86,7 @@ function main() {
   const input = process.stdin
   let scroll = 0
   let total = 0
+  let history = false
 
   const enter = () => out.write('\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h')
   const leave = () => out.write('\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l')
@@ -89,12 +95,14 @@ function main() {
     const width = out.columns || 80
     const height = out.rows || 24
     const body = height - 1
-    const lines = frame(loadRooms(dir, Date.now()), Date.now(), width)
+    const lines = frame(loadRooms(dir, Date.now()), Date.now(), width, history)
     total = lines.length
     scroll = Math.max(0, Math.min(scroll, total - body))
     const shown = lines.slice(scroll, scroll + body)
     const more = total > body ? `  ${scroll + 1}-${Math.min(total, scroll + body)} / ${total} 行` : ''
-    const footer = paint(fit(`q: 終了  ↑↓ PgUp PgDn ホイール: スクロール${more}`, width), { dim: true })
+    const footer = paint(fit(`q: 終了  h: 質問の記録  ↑↓ PgUp PgDn ホイール: スクロール${more}`, width), {
+      dim: true,
+    })
     let screen = '\x1b[H'
     for (const line of shown) screen += `${line}\x1b[K\r\n`
     screen += '\x1b[J'
@@ -120,6 +128,11 @@ function main() {
   input.on('data', (key: string) => {
     const page = Math.max(1, (out.rows || 24) - 2)
     if (key === 'q' || key === '\x03') return quit()
+    if (key === 'h') {
+      history = !history
+      render()
+      return
+    }
     if (key === '\x1b[A' || key === 'k') {
       scrollBy(-1)
       return
