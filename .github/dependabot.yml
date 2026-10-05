@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # 個人で見られる量に抑えるため月1回にする。
+  # bun は security updates の対象外で、alerts も package.json の直接依存しか見ない（bun.lock を読まない）ため、
+  # 脆弱性の修正もこの定期更新で取り込む。依存はすべて devDependencies で利用者の環境には入らないので、月1回で足りる
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Asia/Tokyo
+    # 件名を .claude/rules/git-workflow.md の形式にする（chore(deps): …）
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # minor・patch は 1 つの PR にまとめる。major は変更点を確かめたいので個別の PR にする
+      bun-minor-and-patch:
+        update-types: [minor, patch]
