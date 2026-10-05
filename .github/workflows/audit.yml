@@ -1,0 +1,27 @@
+# Dependabot は bun の security updates に対応しておらず、alerts も bun.lock の間接依存を見ない。
+# その代わりに bun audit で、間接依存を含む既知の脆弱性を確かめる
+name: Audit
+
+on:
+  # Dependabot の定期更新（月1回）にそろえる。毎月1日 9:00（JST）
+  schedule:
+    - cron: '0 0 1 * *'
+  # 依存を足したときや Dependabot の PR も、その場で確かめる
+  pull_request:
+    paths: [package.json, bun.lock]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: bun audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # bun audit は bun.lock だけを読むので bun install は要らない
+      - run: bun audit

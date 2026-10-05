@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # 個人で見られる量に抑えるため月1回にする。
+  # bun は security updates の対象外で、alerts も package.json の直接依存しか見ない（bun.lock を読まない）。
+  # 間接依存の脆弱性は .github/workflows/audit.yml の bun audit で確かめ、修正はこの定期更新で取り込む。
+  # 依存はすべて devDependencies で利用者の環境には入らないので、月1回で足りる
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Asia/Tokyo
+    # 乗っ取られた版はたいてい数日で見つかって取り下げられるので、公開から 7 日たった版だけを提案させる。
+    # 手元の bun install も bunfig.toml の minimumReleaseAge で同じ 7 日にそろえている
+    cooldown:
+      default-days: 7
+    # 件名を .claude/rules/git-workflow.md の形式にする（chore(deps): …）
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # minor・patch は 1 つの PR にまとめる。major は変更点を確かめたいので個別の PR にする
+      bun-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      timezone: Asia/Tokyo
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        update-types: [minor, patch]

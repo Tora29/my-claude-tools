@@ -1,0 +1,4 @@
+[install]
+# 乗っ取られた版はたいてい数日で見つかって取り下げられるので、公開から 7 日（秒で指定）たった版だけを入れる。
+# Dependabot の cooldown（.github/dependabot.yml）も同じ 7 日にそろえている
+minimumReleaseAge = 604800
