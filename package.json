@@ -1,6 +1,7 @@
 {
   "name": "my-claude-tools",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "neko-agents": "tools/neko-room/room.ts"

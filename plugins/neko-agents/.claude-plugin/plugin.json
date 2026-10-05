@@ -5,6 +5,7 @@
   "author": {
     "name": "Tora29"
   },
+  "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
     "summarize": {
