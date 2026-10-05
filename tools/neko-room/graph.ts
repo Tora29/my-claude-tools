@@ -86,7 +86,7 @@ export type Run = { text: string; style: Style }
 const PLAIN: Style = {}
 const LINE: Style = { color: '#7a7a7a' }
 const SPEECH = '#f0c674'
-const SELECTED = '#5fd7ff'
+export const SELECTED = '#5fd7ff'
 const ALERT = '#ff5f5f'
 /** 子猫の箱の枠。色は猫の絵だけで出し、枠はどの子猫も同じ灰色（誰かは名前で分かる）。ボスの枠だけは毛色にして目立たせる */
 const BORDER = '#9e9e9e'
