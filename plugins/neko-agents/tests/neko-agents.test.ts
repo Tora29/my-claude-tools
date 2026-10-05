@@ -42,6 +42,8 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
     agentLists: 0,
     summary: '「調べ終わったニャ」',
     summaries: 0,
+    /** haiku に渡した文章（新しいものが後ろ） */
+    prompts: [] as string[],
     /** メモリ上のファイル：パス → 中身と更新時刻 */
     files: new Map<string, { text: string; mtimeMs: number }>(),
     writes: 0,
@@ -70,8 +72,9 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
     world.pruned++
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('model.complete', () => {
+  on('model.complete', (_$, e) => {
     world.summaries++
+    world.prompts.push(e.prompt)
     const usage = { input_tokens: 300, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
     return { value: { isAnswered: true as const, text: world.summary, usage } }
   })
@@ -113,6 +116,13 @@ function finishSubagent($: Engine, agentId: string, reason: 'answer' | 'aborted'
     reason,
     usage: USAGE,
   })
+}
+
+/** ボスのターン（ユーザーの入力から返事まで）。text が空なら入力のない続きのターン */
+async function bossTurn($: Engine, turnId: string, text: string, work?: () => Promise<unknown>) {
+  await $.turn.start({ text, turnId })
+  await work?.()
+  return $.turn.complete({ answer: `${turnId} の返事`, durationMs: 1, isAborted: false, turnId, reason: 'answer' })
 }
 
 const catOf = (room: Room, id: string) => room.cats.find(cat => cat.id === id)
@@ -326,12 +336,84 @@ describe('要約', () => {
     expect(kitten?.say?.text).toBe('useAuth が重複してたニャ！')
   })
 
+  test('子猫を使った作業が終わると、ボスがまとめてしゃべる', async ($, on) => {
+    const { clock, world, published } = engine(on)
+    await start($)
+    await bossTurn($, 'turn-1', 'useAuth を調べて', async () => {
+      await spawn($, 'auth', 'Explore')
+      await clock.advance(3000)
+      await finishSubagent($, 'agent-auth', 'answer', 'useAuth が重複していました')
+      await clock.advance(1000)
+    })
+    world.summary = '「useAuth の重複を見つけて直したニャ」'
+    await clock.advance(1000)
+    const boss = catOf(await published(), 'main')
+    expect(world.summaries).toBe(2)
+    expect(world.prompts[1]).toContain('（Explore・✓ 完了）：auth')
+    expect(world.prompts[1]).toContain('turn-1 の返事')
+    expect(boss?.summary).toBe('useAuth の重複を見つけて直したニャ')
+    expect(boss?.say?.text).toBe('useAuth の重複を見つけて直したニャ')
+  })
+
+  test('子猫を使わないターンでは、ボスはまとめない', async ($, on) => {
+    const { clock, world, published } = engine(on)
+    await start($)
+    await bossTurn($, 'turn-1', 'こんにちは')
+    await clock.advance(1000)
+    expect(world.summaries).toBe(0)
+    expect(catOf(await published(), 'main')?.summary).toBeUndefined()
+  })
+
+  test('子猫が動いている間はまとめず、続きのターンで全員終わってから 1 回だけまとめる', async ($, on) => {
+    const { clock, world } = engine(on)
+    await start($)
+    await bossTurn($, 'turn-1', '裏で調べて', async () => {
+      await spawn($, 'fg', 'Plan')
+      await spawn($, 'bg', 'Explore')
+      await finishSubagent($, 'agent-fg', 'answer')
+    })
+    await clock.advance(1000)
+    expect(world.summaries).toBe(0)
+
+    await clock.advance(3000)
+    await finishSubagent($, 'agent-bg', 'answer', '調べました')
+    await clock.advance(1000)
+    await bossTurn($, 'turn-2', '')
+    await clock.advance(1000)
+    expect(world.summaries).toBe(2)
+    expect(world.prompts[1]).toContain('：bg')
+
+    // 子猫を使わない続きのターンでは、もうまとめない
+    await bossTurn($, 'turn-3', '')
+    await clock.advance(1000)
+    expect(world.summaries).toBe(2)
+  })
+
+  test('新しい入力の作業では、前の作業の子猫を材料にしない', async ($, on) => {
+    const { clock, world } = engine(on)
+    await start($)
+    await bossTurn($, 'turn-1', '調べて', async () => {
+      await spawn($, 'old', 'Explore')
+      await finishSubagent($, 'agent-old', 'answer', '前の結果')
+    })
+    await clock.advance(1000)
+    await bossTurn($, 'turn-2', '次はこれ', async () => {
+      await spawn($, 'new', 'Plan')
+      await finishSubagent($, 'agent-new', 'answer', '次の結果')
+    })
+    await clock.advance(1000)
+    const last = world.prompts[world.prompts.length - 1] ?? ''
+    expect(last).toContain('：new')
+    expect(last).not.toContain('：old')
+  })
+
   test('要約をオフにすると haiku を呼ばない', { options: { summarize: false } }, async ($, on) => {
     const { clock, world, published } = engine(on)
     await start($)
     await spawn($, 'nosum', 'Explore')
     await clock.advance(5000)
     await finishSubagent($, 'agent-nosum', 'answer', '結果です')
+    await bossTurn($, 'turn-1', '')
     await clock.advance(2000)
     expect(world.summaries).toBe(0)
     expect(catOf(await published(), 'agent-nosum')?.summary).toBeUndefined()

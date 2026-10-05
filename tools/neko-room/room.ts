@@ -5,6 +5,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { isBoss } from '../../plugins/neko-agents/hooks/cats'
 import { isLive, parseRoom, ROOMS_DIR, STALE_MS } from '../../plugins/neko-agents/hooks/rooms'
 import type { Room } from '../../plugins/neko-agents/types'
 import { paint, toAnsi } from './ansi'
@@ -66,8 +67,11 @@ export function frame(rooms: readonly Room[], t: number, width: number): string[
     if (groups.length > 1) lines.push(paint(group.title, { dim: true }))
     for (const runs of group.rows) lines.push(toAnsi(runs))
   }
-  if (scene.reported)
-    lines.push(paint(fit(`${scene.reported.name}の報告：${scene.reported.summary}`, width), { color: REPORT_COLOR }))
+  const { reported } = scene
+  if (reported) {
+    const label = isBoss(reported) ? 'まとめ' : '報告'
+    lines.push(paint(fit(`${reported.name}の${label}：${reported.summary}`, width), { color: REPORT_COLOR }))
+  }
   return lines
 }
 
