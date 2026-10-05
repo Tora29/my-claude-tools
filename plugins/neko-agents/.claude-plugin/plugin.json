@@ -1,6 +1,6 @@
 {
   "name": "neko-agents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "起動中のエージェントを猫にして書き出す（見るのは neko-room ビューア）",
   "author": {
     "name": "Tora29"
@@ -10,7 +10,7 @@
     "summarize": {
       "type": "boolean",
       "title": "結果を猫口調で要約する",
-      "description": "子猫が終わったとき、結果を haiku で猫口調の 1 文に要約して報告させる（1 回あたり数百トークン）",
+      "description": "子猫が終わったときと、子猫を使った作業が終わったときに、結果を haiku で猫口調の 1 文に要約させる（1 回あたり数百トークン）",
       "default": true
     }
   }

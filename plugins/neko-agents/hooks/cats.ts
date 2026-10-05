@@ -514,6 +514,27 @@ export function cleanSummary(text: string): string {
   return truncate(line.replace(/^[「『"']+|[」』"']+$/g, ''), 40)
 }
 
+/** 今の作業（ボスの taskAt 以降）で起動された子猫 */
+export function taskKittens(list: readonly Cat[], boss: Cat): Cat[] {
+  const since = boss.taskAt ?? boss.startedAt
+  return list.filter(cat => !isBoss(cat) && cat.startedAt >= since)
+}
+
+/** 子猫が全員終わっていて、前のまとめより後に終わった子猫がいれば、ボスがまとめる */
+export function needsBossSummary(boss: Cat, kittens: readonly Cat[]): boolean {
+  if (kittens.length === 0 || kittens.some(isActive)) return false
+  return Math.max(...kittens.map(cat => cat.endedAt ?? 0)) > (boss.summaryAt ?? 0)
+}
+
+/** ボスのまとめの材料：子猫たちの仕事とボスの最後の返事 */
+export function bossDigest(answer: string, kittens: readonly Cat[]): string {
+  const jobs = kittens.map(cat => {
+    const result = cat.summary ? ` → ${cat.summary}` : ''
+    return `- ${cat.name}（${typeLabel(cat)}・${statusWord(cat)}）：${cat.description || '（依頼なし）'}${result}`
+  })
+  return ['子猫たちの仕事：', ...jobs, '', 'ボスの最後の返事：', answer.slice(0, 3000)].join('\n')
+}
+
 export function speechOf(cat: Cat, t: number): string | undefined {
   return cat.say && cat.say.from <= t && t < cat.say.until ? cat.say.text : undefined
 }

@@ -123,8 +123,9 @@ export function buildScene(input: SceneInput) {
     }
   }
 
-  // 最新の報告（要約）
-  const reported = list.filter(cat => cat.summary).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]
+  // 最新の報告（要約）。summaryAt の無い古いファイルは終わった時刻で比べる
+  const reportedAt = (cat: Cat) => cat.summaryAt ?? cat.endedAt ?? 0
+  const reported = list.filter(cat => cat.summary).sort((a, b) => reportedAt(b) - reportedAt(a))[0]
 
   return {
     t,

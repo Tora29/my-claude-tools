@@ -7,6 +7,7 @@ import type { Cat } from '../types'
 import {
   advanceTrip,
   advanceTrips,
+  bossDigest,
   chatter,
   cleanSummary,
   HANDOFF_STAY_MS,
@@ -14,6 +15,7 @@ import {
   isBoss,
   isEnded,
   MAIN_ID,
+  needsBossSummary,
   newBoss,
   parentOf,
   pickLine,
@@ -26,6 +28,7 @@ import {
   str,
   summarize,
   SUMMARY_SAY_MS,
+  taskKittens,
   type ToolArgs,
   totalTokens,
   WALK_MS,
@@ -52,6 +55,12 @@ const SUMMARY_SYSTEM = [
   '語尾は「ニャ」にして、25 文字以内で答えてください。前置き・引用符・改行は付けないでください。',
 ].join('\n')
 
+const BOSS_SUMMARY_SYSTEM = [
+  'あなたは親猫（ボス）です。渡される文章は、あなたが子猫たちに手伝ってもらってこなした作業の記録です。',
+  '結局なにをして、どうなったかを 1 文にまとめてください。',
+  '語尾は「ニャ」にして、35 文字以内で答えてください。前置き・引用符・改行は付けないでください。',
+].join('\n')
+
 type Dollar = EngineInterface
 
 /** 失敗してもよい後回しの処理（書き出しなど）の失敗は捨てる。次の回にまたやる */
@@ -63,6 +72,7 @@ let roomsDir: string | undefined
 let publishTimer: Timer | undefined
 let lastKey = ''
 let lastWriteAt = 0
+let bossSummarizing = false
 
 // ---------------------------------------------------------------- タイマー
 
@@ -210,7 +220,7 @@ async function summarizeReport($: Dollar, id: string, answer: string) {
   await update($, cats, list =>
     list.map(cat => {
       if (cat.id !== id) return cat
-      const withSummary = { ...cat, summary }
+      const withSummary = { ...cat, summary, summaryAt: t }
       const trip = cat.trip && advanceTrip(cat.trip, t)
       if (trip?.reason !== 'report') return withSummary
       // 着く前なら着いたときに、滞在中ならすぐに言う（部屋を出た後は記録だけ）
@@ -220,6 +230,29 @@ async function summarizeReport($: Dollar, id: string, answer: string) {
       if (trip.phase === 'stay') return speak(withSummary, summary, t, SUMMARY_SAY_MS)
       return withSummary
     }),
+  )
+  await changed($)
+}
+
+/** 一連の作業が終わったら、ボスが子猫たちとこなしたことを 1 文にまとめてしゃべる */
+async function summarizeTask($: Dollar, answer: string) {
+  const list = await read($, cats)
+  const boss = list.find(cat => cat.id === MAIN_ID)
+  if (!boss) return
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: BOSS_SUMMARY_SYSTEM,
+    prompt: bossDigest(answer, taskKittens(list, boss)),
+    maxTokens: 100,
+    effort: 'low',
+    timeoutMs: 15_000,
+  })
+  if (!reply.isAnswered) return
+  const summary = cleanSummary(reply.text)
+  if (!summary) return
+  const t = await $.clock.now()
+  await update($, cats, list =>
+    list.map(cat => (cat.id === MAIN_ID ? speak({ ...cat, summary, summaryAt: t }, summary, t, SUMMARY_SAY_MS) : cat)),
   )
   await changed($)
 }
@@ -244,8 +277,14 @@ export const register: Register = (on, options) => {
       upsert(
         list,
         MAIN_ID,
-        cat => ({ ...withoutAsking(withoutEnd(withoutCurrent(cat))), status: 'running', startedAt: t }),
-        () => newBoss(t),
+        // 入力のないターン（子猫の完了を受けての続きなど）は、同じ作業の続きとみなす
+        cat => ({
+          ...withoutAsking(withoutEnd(withoutCurrent(cat))),
+          status: 'running',
+          startedAt: t,
+          taskAt: e.text || cat.taskAt === undefined ? t : cat.taskAt,
+        }),
+        () => ({ ...newBoss(t), taskAt: t }),
       ),
     )
     await changed($)
@@ -417,6 +456,23 @@ export const register: Register = (on, options) => {
     const answer = e.answer.trim()
     if (summaryOn && agentId && e.reason === 'answer' && answer) {
       $.clock.after(0, () => void summarizeReport($, agentId, answer).catch(ignore))
+    }
+    // ボスのターンの終わり：子猫を使った作業がひと区切りついていたら、まとめる
+    if (summaryOn && !agentId && e.reason === 'answer' && !bossSummarizing) {
+      const list = await read($, cats)
+      const boss = list.find(cat => cat.id === MAIN_ID)
+      if (boss && needsBossSummary(boss, taskKittens(list, boss))) {
+        bossSummarizing = true
+        $.clock.after(
+          0,
+          () =>
+            void summarizeTask($, answer)
+              .catch(ignore)
+              .finally(() => {
+                bossSummarizing = false
+              }),
+        )
+      }
     }
 
     return next(e)

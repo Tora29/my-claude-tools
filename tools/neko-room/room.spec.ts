@@ -90,6 +90,23 @@ describe('frame', () => {
     ).toBe(true)
   })
 
+  test('図の下に最新の要約を出す。ボスの要約は「まとめ」', () => {
+    const withSummaries = (bossAt: number) => {
+      const base = room('a', 'alpha')
+      const [boss, kitten] = base.cats
+      return {
+        ...base,
+        cats: [
+          { ...boss!, summary: '全部なおしたニャ', summaryAt: bossAt },
+          { ...kitten!, status: 'completed' as const, endedAt: T, summary: '見つけたニャ', summaryAt: T },
+        ],
+      }
+    }
+    const last = (r: Room) => stripAnsi(frame([r], T + 10_000, 80).at(-1) ?? '')
+    expect(last(withSummaries(T + 5000))).toContain('ボスのまとめ：全部なおしたニャ')
+    expect(last(withSummaries(T - 5000))).toContain('ソラの報告：見つけたニャ')
+  })
+
   test('色は 24bit カラーで付く', () => {
     expect(frame([room('a', 'alpha')], T, 80).join('')).toContain('\x1b[38;2;224;145;58m')
   })
