@@ -65,6 +65,26 @@ describe('draw', () => {
     for (const row of plain(draw(layout(cats, [], 70), content, []))) expect(textWidth(row)).toBe(70)
   })
 
+  test('子猫の枠は同じ灰色で色は猫の絵にだけ付き、ボスの枠だけは茶トラの色', () => {
+    const cats = [
+      { ...newBoss(0), status: 'running' as const },
+      kitten('a', { name: 'ミケ' }),
+      kitten('b', { name: 'クロ' }),
+    ]
+    const rows = draw(layout(cats, [], 80), content, [])
+    const colorsOf = (ch: string) =>
+      new Set(
+        rows
+          .flat()
+          .filter(run => run.text.includes(ch))
+          .map(run => run.style.color),
+      )
+    // 角（╭ ╯）は、子猫 2 匹は同じ灰色、ボスだけ茶トラ
+    for (const corner of ['╭', '╯']) expect(colorsOf(corner)).toEqual(new Set(['#e0913a', '#9e9e9e']))
+    // 三毛の顔は白、ボスの顔は茶トラ
+    expect(colorsOf('( o.o )')).toEqual(new Set(['#e0913a', '#eeeeee', '#8a8a8a']))
+  })
+
   test('親子は箱の下端の ┬ から上端の ┴ へ線でつながる', () => {
     const rows = plain(draw(layout([newBoss(0), kitten('a')], [], 60), content, []))
     expect(rows.some(row => row.includes('┬'))).toBe(true)
