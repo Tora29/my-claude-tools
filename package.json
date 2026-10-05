@@ -1,0 +1,27 @@
+{
+  "name": "my-claude-tools",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "neko-agents": "tools/neko-room/room.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tools && for d in plugins/*/; do tsc -p \"$d\" || exit 1; done",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "validate": "claude plugin validate . && for d in plugins/*/; do claude plugin validate \"$d\" || exit 1; done",
+    "test": "bun test tools && for d in plugins/*/; do claude plugin test \"$d\" || exit 1; done",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run validate && bun run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.2",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-simple-import-sort": "^14.0.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6",
+    "typescript-eslint": "^8.71.0"
+  }
+}

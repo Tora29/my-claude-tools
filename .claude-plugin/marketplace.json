@@ -1,0 +1,14 @@
+{
+  "name": "my-claude-tools",
+  "owner": {
+    "name": "Tora29"
+  },
+  "description": "Tora29 の Claude Code ツール集",
+  "plugins": [
+    {
+      "name": "neko-agents",
+      "source": "./plugins/neko-agents",
+      "description": "起動中のエージェントを猫で可視化する"
+    }
+  ]
+}

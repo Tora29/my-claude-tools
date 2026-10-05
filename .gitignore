@@ -1,0 +1,4 @@
+# Claude Code が Mod を読み込むたびに自動生成する型定義
+plugins/*/.claude-plugin/types/
+.DS_Store
+node_modules/
