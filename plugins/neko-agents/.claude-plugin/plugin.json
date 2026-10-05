@@ -1,6 +1,6 @@
 {
   "name": "neko-agents",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "起動中のエージェントを猫にして書き出す（見るのは neko-room ビューア）",
   "author": {
     "name": "Tora29"

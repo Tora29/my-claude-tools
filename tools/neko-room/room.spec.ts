@@ -133,6 +133,17 @@ describe('frame', () => {
     expect(last(withSummaries(T - 5000))).toContain('ソラの報告：見つけたニャ')
   })
 
+  test('長い報告は切らずに折り返す', () => {
+    const base = room('a', 'alpha')
+    const [boss, kitten] = base.cats
+    const summary = 'ポリシー文書を版0.08から0.09に更新し、根拠ある19件を修正、方針判断1件を残したニャ'
+    const reported = { ...base, cats: [boss!, { ...kitten!, summary, summaryAt: T }] }
+    const lines = frame([reported], T, 50).map(line => stripAnsi(line).trim())
+    const start = lines.findIndex(line => line.startsWith('ソラの報告：'))
+    expect(lines.slice(start).join('')).toContain(summary)
+    expect(lines.slice(start).join('')).not.toContain('…')
+  })
+
   const ask = (extra: Partial<Ask> = {}): Ask => ({
     id: 'toolu-ask',
     catId: 'main',
