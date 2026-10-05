@@ -9,7 +9,7 @@ import { newBoss } from '../../plugins/neko-agents/hooks/cats'
 import type { Ask, Cat, Room } from '../../plugins/neko-agents/types'
 import { stripAnsi } from './ansi'
 import { textWidth } from './graph'
-import { frame, loadRooms } from './room'
+import { frame, hitAt, loadRooms } from './room'
 import { wrap } from './view'
 
 const T = 1_700_000_000_000
@@ -81,9 +81,11 @@ describe('wrap', () => {
   })
 })
 
+const linesOf = (...args: Parameters<typeof frame>) => frame(...args).lines
+
 describe('frame', () => {
   test('全タブの猫を、タブごとの区画に分けて描く', () => {
-    const lines = frame([room('a', 'alpha'), room('b', 'beta')], T, 80).map(stripAnsi)
+    const lines = linesOf([room('a', 'alpha'), room('b', 'beta')], T, 80).map(stripAnsi)
     expect(lines[0]).toContain('ねこ部屋 · 作業中の子猫 2 匹 · タブ 2 つ')
     const rowOf = (part: string) => lines.findIndex(line => line.includes(part))
     expect(rowOf('── alpha')).toBeGreaterThan(0)
@@ -93,24 +95,24 @@ describe('frame', () => {
   })
 
   test('同じプロジェクトのタブが複数あれば、セッション id で見分ける', () => {
-    const lines = frame([room('aaaaaaaa-1', 'same'), room('bbbbbbbb-2', 'same')], T, 80).map(stripAnsi)
+    const lines = linesOf([room('aaaaaaaa-1', 'same'), room('bbbbbbbb-2', 'same')], T, 80).map(stripAnsi)
     expect(lines.some(line => line.includes('── same（aaaaaaaa）'))).toBe(true)
     expect(lines.some(line => line.includes('── same（bbbbbbbb）'))).toBe(true)
   })
 
   test('どの行も画面の幅を超えない', () => {
     for (const width of [50, 80, 120]) {
-      for (const line of frame([room('a', 'alpha'), room('b', 'とても長いプロジェクト名のリポジトリ')], T, width)) {
+      for (const line of linesOf([room('a', 'alpha'), room('b', 'とても長いプロジェクト名のリポジトリ')], T, width)) {
         expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width)
       }
     }
   })
 
   test('狭いときは 1 匹 1 行、猫がいなければ案内を出す', () => {
-    const narrow = frame([room('a', 'alpha')], T, 30).map(stripAnsi)
+    const narrow = linesOf([room('a', 'alpha')], T, 30).map(stripAnsi)
     expect(narrow.some(line => line.startsWith('(o.o) ボス'))).toBe(true)
     expect(
-      frame([], T, 80)
+      linesOf([], T, 80)
         .map(stripAnsi)
         .some(line => line.includes('まだ猫がいません')),
     ).toBe(true)
@@ -128,7 +130,7 @@ describe('frame', () => {
         ],
       }
     }
-    const last = (r: Room) => stripAnsi(frame([r], T + 10_000, 80).at(-1) ?? '')
+    const last = (r: Room) => stripAnsi(linesOf([r], T + 10_000, 80).at(-1) ?? '')
     expect(last(withSummaries(T + 5000))).toContain('ボスのまとめ：全部なおしたニャ')
     expect(last(withSummaries(T - 5000))).toContain('ソラの報告：見つけたニャ')
   })
@@ -138,7 +140,7 @@ describe('frame', () => {
     const [boss, kitten] = base.cats
     const summary = 'ポリシー文書を版0.08から0.09に更新し、根拠ある19件を修正、方針判断1件を残したニャ'
     const reported = { ...base, cats: [boss!, { ...kitten!, summary, summaryAt: T }] }
-    const lines = frame([reported], T, 50).map(line => stripAnsi(line).trim())
+    const lines = linesOf([reported], T, 50).map(line => stripAnsi(line).trim())
     const start = lines.findIndex(line => line.startsWith('ソラの報告：'))
     expect(lines.slice(start).join('')).toContain(summary)
     expect(lines.slice(start).join('')).not.toContain('…')
@@ -173,7 +175,7 @@ describe('frame', () => {
       status: 'answered',
       answers: { 'どの方式でログインを作りますか？': 'OAuth' },
     })
-    const lines = frame([room('a', 'alpha', { asks: [past, ask()] })], T, 80).map(stripAnsi)
+    const lines = linesOf([room('a', 'alpha', { asks: [past, ask()] })], T, 80).map(stripAnsi)
     const text = lines.join('\n')
     expect(text).toContain('┄┄ ボスの質問（回答待ち）')
     expect(text).toContain('ボス「方式について聞きたいニャ」')
@@ -191,22 +193,22 @@ describe('frame', () => {
     const answered = room('a', 'alpha', {
       asks: [ask({ status: 'answered', answers: { 'どの方式でログインを作りますか？': 'パスワード' } })],
     })
-    const closed = frame([answered], T, 80).map(stripAnsi)
+    const closed = linesOf([answered], T, 80).map(stripAnsi)
     expect(closed.at(-1)).toContain('→ パスワード（h で質問の記録）')
     expect(closed.join('\n')).not.toContain('【なぜ聞いているか】')
-    const opened = frame([answered], T, 80, true).map(stripAnsi).join('\n')
+    const opened = linesOf([answered], T, 80, { history: true }).map(stripAnsi).join('\n')
     expect(opened).toContain('┄┄ 質問の記録（新しい順）')
     expect(opened).toContain('✔ パスワード')
     expect(opened).toContain('1. OAuth')
   })
 
   test('回答待ちの間に報告が届いたら、前の解説を出したまま考え直し、考え直したと言う', () => {
-    const thinking = frame([room('a', 'alpha', { asks: [ask({ explain: 'pending', revisedFor: ['ソラ'] })] })], T, 80)
+    const thinking = linesOf([room('a', 'alpha', { asks: [ask({ explain: 'pending', revisedFor: ['ソラ'] })] })], T, 80)
       .map(stripAnsi)
       .join('\n')
     expect(thinking).toContain('ボス「ソラの報告が来たから考え直してるニャ…」')
     expect(thinking).toContain('【なぜ聞いているか】')
-    const revised = frame([room('a', 'alpha', { asks: [ask({ revisedFor: ['ソラ', 'クロ'] })] })], T, 80)
+    const revised = linesOf([room('a', 'alpha', { asks: [ask({ revisedFor: ['ソラ', 'クロ'] })] })], T, 80)
       .map(stripAnsi)
       .join('\n')
     expect(revised).toContain('ボス「ソラ・クロの報告が来たから考え直したニャ」')
@@ -217,7 +219,7 @@ describe('frame', () => {
     const code = ask({
       explanation: `### 選択肢ごとの影響\n${'あ'.repeat(30)}の import を \`../hooks/useAuth\` に変える`,
     })
-    const lines = frame([room('a', 'alpha', { asks: [code] })], T, 80).map(line => stripAnsi(line).trimEnd())
+    const lines = linesOf([room('a', 'alpha', { asks: [code] })], T, 80).map(line => stripAnsi(line).trimEnd())
     expect(
       lines.some(line => line.endsWith('../hooks/useAuth') || line.trimStart().startsWith('../hooks/useAuth')),
     ).toBe(true)
@@ -231,7 +233,7 @@ describe('frame', () => {
       ...asking,
       cats: [boss!, { ...kitten!, status: 'completed', endedAt: T, summary: 'alpha で見つけたニャ', summaryAt: T }],
     }
-    const lines = frame([withReport, room('b', 'beta')], T, 80).map(stripAnsi)
+    const lines = linesOf([withReport, room('b', 'beta')], T, 80).map(stripAnsi)
     const rowOf = (part: string) => lines.findIndex(line => line.includes(part))
     expect(rowOf('ソラの報告：alpha で見つけたニャ')).toBeGreaterThan(rowOf('── alpha'))
     expect(rowOf('ソラの報告：alpha で見つけたニャ')).toBeLessThan(rowOf('── beta'))
@@ -249,7 +251,7 @@ describe('frame', () => {
       answers: { [question]: 'OAuth' },
     })
     const last = (width: number, asks: Ask[]) =>
-      frame([room('a', 'alpha', { asks })], T, width)
+      linesOf([room('a', 'alpha', { asks })], T, width)
         .map(line => stripAnsi(line).trimEnd())
         .at(-1) ?? ''
     expect(last(60, [long])).toBe('ボス：[方式] ログイン方式をどうす… → OAuth（h で質問の記録）')
@@ -262,7 +264,7 @@ describe('frame', () => {
     const long = ask({ explanation: `### いまの指示\n${'とても長い説明ニャ'.repeat(20)}` })
     for (const width of [30, 50, 80]) {
       for (const history of [false, true]) {
-        for (const line of frame([room('a', 'alpha', { asks: [long] })], T, width, history)) {
+        for (const line of linesOf([room('a', 'alpha', { asks: [long] })], T, width, { history })) {
           expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width)
         }
       }
@@ -270,6 +272,83 @@ describe('frame', () => {
   })
 
   test('色は 24bit カラーで付く', () => {
-    expect(frame([room('a', 'alpha')], T, 80).join('')).toContain('\x1b[38;2;224;145;58m')
+    expect(linesOf([room('a', 'alpha')], T, 80).join('')).toContain('\x1b[38;2;224;145;58m')
+  })
+})
+
+describe('猫の詳細', () => {
+  const busy = (r: Room): Room => {
+    const [boss, kitten] = r.cats
+    return {
+      ...r,
+      cats: [
+        boss!,
+        {
+          ...kitten!,
+          toolCount: 3,
+          tokens: 12_000,
+          current: 'Read types.ts',
+          recent: ['Grep "useAuth"', '$ bun test', 'Read room.ts'],
+          summary: 'useAuth が重複してたニャ',
+        },
+      ],
+    }
+  }
+
+  test('箱の範囲から、クリックした場所の猫が分かる', () => {
+    const { lines, hits } = frame([room('a', 'alpha'), room('b', 'beta')], T, 80)
+    const plain = lines.map(stripAnsi)
+    for (const [id, text] of [
+      ['a/k-a', '「alpha を調査」'],
+      ['b/k-b', '「beta を調査」'],
+    ] as const) {
+      const row = plain.findIndex(line => line.includes(text))
+      const column = textWidth(plain[row]!.slice(0, plain[row]!.indexOf(text)))
+      expect(hitAt(hits, row, column)).toBe(id)
+    }
+    expect(hitAt(hits, 0, 0)).toBeUndefined()
+  })
+
+  test('狭いときは 1 匹 1 行のどこをクリックしてもその猫', () => {
+    const { lines, hits } = frame([room('a', 'alpha')], T, 30)
+    const row = lines.map(stripAnsi).findIndex(line => line.includes('ソラ'))
+    expect(hitAt(hits, row, 0)).toBe('a/k-a')
+    expect(hitAt(hits, row, 29)).toBe('a/k-a')
+  })
+
+  test('選んだ猫の様子・依頼・報告・最近の操作を出す', () => {
+    const { detail } = frame([busy(room('a', 'alpha'))], T + 15_000, 80, { selected: 'a/k-a' })
+    const text = detail.map(stripAnsi).join('\n')
+    expect(text).toContain('┄┄ ソラの詳細（Explore）')
+    expect(text).toContain('様子：▶ Read types.ts · 00:15 · 3 tools · 12k tok')
+    expect(text).toContain('ボスからの依頼：alpha を調査')
+    expect(text).toContain('報告：useAuth が重複してたニャ')
+    expect(text).toContain('最近の操作（新しい順）')
+    expect(text.indexOf('Grep "useAuth"')).toBeLessThan(text.indexOf('Read room.ts'))
+  })
+
+  test('行数が足りなければ古い操作から削り、何件出したかを書く', () => {
+    const detail = frame([busy(room('a', 'alpha'))], T, 80, { selected: 'a/k-a', detailRows: 7 }).detail.map(stripAnsi)
+    expect(detail).toHaveLength(7)
+    expect(detail.join('\n')).toContain('新しい順に 2 / 3 件')
+    expect(detail.join('\n')).not.toContain('Read room.ts')
+  })
+
+  test('選んだ猫の箱は水色の枠になり、いない猫や選んでいないときは詳細を出さない', () => {
+    const selected = frame([room('a', 'alpha')], T, 80, { selected: 'a/k-a' })
+    expect(selected.lines.join('')).toContain('\x1b[38;2;95;215;255m')
+    expect(frame([room('a', 'alpha')], T, 80).detail).toEqual([])
+    expect(frame([room('a', 'alpha')], T, 80, { selected: 'gone' }).detail).toEqual([])
+  })
+
+  test('詳細も画面の幅を超えない', () => {
+    const long = busy(room('a', 'alpha'))
+    const [boss, kitten] = long.cats
+    const cats = [boss!, { ...kitten!, description: 'とても長い依頼ニャ'.repeat(20), recent: ['$ '.padEnd(200, 'x')] }]
+    for (const width of [30, 50, 80]) {
+      for (const line of frame([{ ...long, cats }], T, width, { selected: 'a/k-a' }).detail) {
+        expect(textWidth(stripAnsi(line))).toBeLessThanOrEqual(width)
+      }
+    }
   })
 })

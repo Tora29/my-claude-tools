@@ -443,6 +443,49 @@ export function askLines(scene: Scene, width: number, history = false, key?: str
   return lines
 }
 
+// ---------------------------------------------------------------- 猫の詳細
+
+/**
+ * クリックした猫の詳細：今の様子・依頼・報告・最近の操作（新しい順）。
+ * rows 行に収め、入りきらない分は古い操作から削る。猫が見つからなければ空
+ */
+export function detailLines(scene: Scene, id: string, width: number, rows: number): Line[] {
+  const cat = scene.byId.get(id)
+  if (!cat || rows <= 0) return []
+  const kind = isBoss(cat) ? (scene.tabs > 1 ? cat.project : undefined) : typeLabel(cat)
+  const head = rule(`${cat.name}の詳細${kind ? `（${kind}）` : ''}  Esc で閉じる`, width)
+  const stats = [
+    scene.doingOf(cat),
+    formatElapsed(elapsedOf(cat, scene.t)),
+    `${cat.toolCount} tools`,
+    cat.tokens ? formatTokens(cat.tokens) : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const parent = isBoss(cat) ? undefined : scene.byId.get(parentOf(cat, scene.ids))
+  const lines: Line[] = [head, ...out(`様子：${stats}`, width - 2, {}, '      ').map(indent)]
+  if (cat.description) {
+    const from = parent ? `${parent.name}からの依頼` : '依頼'
+    lines.push(...out(`${from}：${cat.description}`, width - 2, {}, '  ').map(indent))
+  }
+  if (cat.summary) {
+    const label = isBoss(cat) ? 'まとめ' : '報告'
+    lines.push(...out(`${label}：${cat.summary}`, width - 2, { color: REPORT_COLOR }, '  ').map(indent))
+  }
+  const recent = cat.recent.map(op => ({ text: `    ${fitText(op, width - 4)}`, dim: true }))
+  const fixed = lines.slice(0, rows)
+  const room = rows - fixed.length - 1
+  if (room <= 0) return fixed
+  const shown = recent.slice(0, room)
+  const title =
+    recent.length > shown.length
+      ? `最近の操作（新しい順に ${shown.length} / ${recent.length} 件）`
+      : '最近の操作（新しい順）'
+  return [...fixed, { text: `  ${recent.length > 0 ? title : '最近の操作：まだありません'}`, bold: true }, ...shown]
+}
+
+const indent = (line: Line): Line => ({ ...line, text: `  ${line.text}` })
+
 /** はみ出す分を … で切る（埋めはしない） */
 function fitText(text: string, width: number): string {
   if (textWidth(text) <= width) return text
