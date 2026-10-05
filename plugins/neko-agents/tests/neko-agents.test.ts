@@ -6,6 +6,7 @@ import {
   advanceTrip,
   CHAT_EVERY_MS,
   chatter,
+  cleanSummary,
   coatOf,
   cycle,
   LINES,
@@ -14,6 +15,7 @@ import {
   resolveTarget,
   speechOf,
   startTrip,
+  SUMMARY_MAX,
 } from '../hooks/cats'
 import { batonsFor } from '../hooks/links'
 import {
@@ -724,6 +726,13 @@ describe('純粋なロジック', () => {
     expect(coatOf(newBoss(0))).toEqual(['#e0913a', '#e0913a', '#e0913a'])
     // 一覧に無い名前でも、同じ名前なら同じ色
     expect(coatOf({ id: 'e', type: 'x', name: 'ポチ' })).toEqual(coatOf({ id: 'f', type: 'y', name: 'ポチ' }))
+  })
+
+  test('要約は最初の 1 行の引用符を外し、指示より長くても SUMMARY_MAX 文字までは切らない', () => {
+    expect(cleanSummary('\n「見つけたニャ」\n補足')).toBe('見つけたニャ')
+    const long = `ポリシー文書を版0.08から0.09に更新し、根拠ある19件を修正、方針判断1件を残したニャ`
+    expect(cleanSummary(long)).toBe(long)
+    expect(cleanSummary('あ'.repeat(SUMMARY_MAX + 10))).toHaveLength(SUMMARY_MAX)
   })
 
   test('cycle は範囲外の番号を折り返す', () => {

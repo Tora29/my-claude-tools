@@ -9,7 +9,17 @@ import { isLive, parseRoom, ROOMS_DIR, STALE_MS } from '../../plugins/neko-agent
 import type { Room } from '../../plugins/neko-agents/types'
 import { paint, toAnsi } from './ansi'
 import { fit } from './graph'
-import { askLines, buildScene, headline, narrowLines, REPORT_COLOR, reportedIn, reportLine, sections } from './view'
+import {
+  askLines,
+  buildScene,
+  headline,
+  narrowLines,
+  REPORT_COLOR,
+  reportedIn,
+  reportLine,
+  sections,
+  wrap,
+} from './view'
 
 /** 描き直しの間隔。Mod のパネルで猫が歩くときと同じ */
 const FRAME_MS = 200
@@ -55,7 +65,10 @@ export function frame(rooms: readonly Room[], t: number, width: number, history 
   // 報告と質問は、そのタブの区画の中（図のすぐ下）に出す。key を省くと全タブ分
   const below = (key?: string) => {
     const reported = reportedIn(scene, key)
-    const report = reported ? [paint(fit(reportLine(reported), width), { color: REPORT_COLOR })] : []
+    // 報告は切らずに折り返す（2 行目からは字下げ）
+    const report = reported
+      ? wrap(reportLine(reported), width, '  ').map(line => paint(fit(line, width), { color: REPORT_COLOR }))
+      : []
     const questions = askLines(scene, width, history, key).map(line =>
       paint(fit(line.text, width), { color: line.color, bold: line.bold, dim: line.dim }),
     )

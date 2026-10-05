@@ -527,14 +527,20 @@ export const SUMMARY_SAY_MS = 6000
 /** 質問の吹き出しは、答えるまで出し続ける（部屋のファイルに書くので Infinity の代わりに 1 日） */
 export const ASK_SAY_MS = 24 * 60 * 60_000
 
-/** モデルの返事を、吹き出しに入る 1 文に整える */
+/**
+ * 要約の長さの上限。モデルが指示より長く返しても、報告は図の下で折り返して全部見せる。
+ * 箱の中の吹き出しは箱の幅で切って出す
+ */
+export const SUMMARY_MAX = 100
+
+/** モデルの返事を 1 文に整える */
 export function cleanSummary(text: string): string {
   const line =
     text
       .split('\n')
       .map(part => part.trim())
       .find(part => part.length > 0) ?? ''
-  return truncate(line.replace(/^[「『"']+|[」』"']+$/g, ''), 40)
+  return truncate(line.replace(/^[「『"']+|[」』"']+$/g, ''), SUMMARY_MAX)
 }
 
 /** 今の作業（ボスの taskAt 以降）で起動された子猫 */
