@@ -3,10 +3,11 @@
 import type { AgentInfo, EngineInterface, Register, Timer } from 'claude-code'
 import { atom, read, update } from 'claude-code'
 
-import type { Cat } from '../types'
+import type { Ask, Cat } from '../types'
 import {
   advanceTrip,
   advanceTrips,
+  ASK_SAY_MS,
   bossDigest,
   chatter,
   cleanSummary,
@@ -35,9 +36,26 @@ import {
   withoutAsking,
   withoutCurrent,
   withoutEnd,
+  withoutSay,
   writtenPath,
 } from './cats'
 import { addLink, batonsFor } from './links'
+import {
+  addAsk,
+  answeredLine,
+  answersOf,
+  cleanExplanation,
+  contextOf,
+  EXPLAIN_SYSTEM,
+  explainPrompt,
+  helpersOf,
+  kittenDigest,
+  PROMPTS_MAX,
+  rememberReport,
+  REVISE_DELAY_MS,
+  toQuestions,
+  updateAsk,
+} from './questions'
 import { contentKey, HEARTBEAT_MS, projectOf, PUBLISH_DELAY_MS, roomFile, ROOMS_DIR, snapshot } from './rooms'
 
 /** 野良猫がこの時間ツールを呼ばなければ寝たことにする */
@@ -48,6 +66,9 @@ const TICK_MS = 1000
 const cats = atom({ plugin: 'neko-agents', key: 'cats' } as const, [])
 const files = atom({ plugin: 'neko-agents', key: 'files' } as const, {})
 const links = atom({ plugin: 'neko-agents', key: 'links' } as const, [])
+const asks = atom({ plugin: 'neko-agents', key: 'asks' } as const, [])
+const prompts = atom({ plugin: 'neko-agents', key: 'prompts' } as const, [])
+const reports = atom({ plugin: 'neko-agents', key: 'reports' } as const, {})
 
 const SUMMARY_SYSTEM = [
   'あなたは猫です。渡される文章は、あなた（子猫）がこなした調査や作業の結果です。',
@@ -73,6 +94,15 @@ let publishTimer: Timer | undefined
 let lastKey = ''
 let lastWriteAt = 0
 let bossSummarizing = false
+/**
+ * 次のターンが、ユーザー本人の入力で始まるか（prompt.submit で決めて turn.start で使う）。
+ * 子猫の完了通知や別のセッションからのメッセージで始まるターンは、同じ作業の続きとみなす
+ */
+let fromUser: boolean | undefined
+/** 質問 id → 何回目の解説か。作り直したあとに古い解説が届いても書かない */
+const explainRuns = new Map<string, number>()
+/** 質問 id → 作り直しの予約（待っている間に終わった子猫の名前） */
+const revisions = new Map<string, { timer: Timer; names: string[] }>()
 
 // ---------------------------------------------------------------- タイマー
 
@@ -161,8 +191,8 @@ async function writeRoom($: Dollar, closing?: string) {
   const session = closing ?? (await $.session.id())
   const project = projectOf(await $.session.cwd())
   const room = closing
-    ? snapshot(session, project, t, [], [], true)
-    : snapshot(session, project, t, await read($, cats), await read($, links))
+    ? snapshot(session, project, t, [], [], [], true)
+    : snapshot(session, project, t, await read($, cats), await read($, links), await read($, asks))
   const key = session + contentKey(room)
   const busy = room.cats.some(cat => isActive(cat) || cat.trip)
   if (key === lastKey && !(busy && t - lastWriteAt >= HEARTBEAT_MS)) return
@@ -257,8 +287,93 @@ async function summarizeTask($: Dollar, answer: string) {
   await changed($)
 }
 
+/**
+ * 質問を猫口調で解説する。答えを待たせないよう、タイマーから裏で動かす。
+ * revisedFor は、回答待ちの間に報告が届いて作り直すときの子猫の名前（前の解説は出したまま考え直す）
+ */
+async function explainAsk($: Dollar, id: string, revisedFor?: string[]) {
+  const run = (explainRuns.get(id) ?? 0) + 1
+  explainRuns.set(id, run)
+  const ask = (await read($, asks)).find(one => one.id === id)
+  if (!ask) return
+  if (revisedFor) {
+    await update($, asks, list => updateAsk(list, id, one => ({ ...one, explain: 'pending', revisedFor })))
+    await changed($)
+  }
+  const agentId = ask.catId === MAIN_ID ? undefined : ask.catId
+  let context: ReturnType<typeof contextOf> = { lead: '', tools: [], prompts: [] }
+  try {
+    // 子猫の質問なら、その子猫の会話から拾う
+    const found = agentId ? await $.session.messages({ agentId }) : await $.session.messages()
+    if (Array.isArray(found)) context = contextOf(found)
+  } catch {
+    // 文脈が取れなくても、質問だけで解説する
+  }
+  // ボスへの指示はユーザーの入力。子猫への指示は親からの依頼（子猫の会話の最初）
+  const recorded = agentId ? [] : await read($, prompts)
+  const kittens = kittenDigest(helpersOf(await read($, cats), ask.catId), await read($, reports))
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: EXPLAIN_SYSTEM,
+    prompt: explainPrompt(
+      ask.questions,
+      recorded.length > 0 ? recorded : context.prompts,
+      context.lead,
+      context.tools,
+      kittens,
+    ),
+    maxTokens: 1000,
+    effort: 'low',
+    timeoutMs: 30_000,
+  })
+  const explanation = reply.isAnswered ? cleanExplanation(reply.text) : ''
+  if (explainRuns.get(id) !== run) return
+  await update($, asks, list =>
+    updateAsk(list, id, one => {
+      if (explanation) return { ...one, explain: 'done', explanation }
+      // 作り直しに失敗したら、前の解説を出したままにする
+      return { ...one, explain: one.explanation ? 'done' : 'error' }
+    }),
+  )
+  await changed($)
+}
+
+/** 回答待ちの質問を手伝っている子猫が終わったら、少し待ってから解説を作り直す */
+async function reviseAsks($: Dollar, kittenId: string) {
+  const list = await read($, cats)
+  const name = list.find(cat => cat.id === kittenId)?.name
+  if (!name) return
+  for (const ask of await read($, asks)) {
+    if (ask.status !== 'open' || ask.explain === 'off') continue
+    if (!helpersOf(list, ask.catId).some(cat => cat.id === kittenId)) continue
+    const waiting = revisions.get(ask.id)
+    waiting?.timer.cancel()
+    const names = [...new Set([...(waiting?.names ?? []), name])]
+    const timer = $.clock.after(REVISE_DELAY_MS, () => {
+      revisions.delete(ask.id)
+      void (async () => {
+        const still = (await read($, asks)).find(one => one.id === ask.id)
+        if (still?.status === 'open') await explainAsk($, ask.id, names)
+      })().catch(ignore)
+    })
+    revisions.set(ask.id, { timer, names })
+  }
+}
+
 export const register: Register = (on, options) => {
   const summaryOn = options.summarize !== false
+  const explainOn = options.explainQuestions !== false
+
+  // ユーザーが自分で入力したプロンプトだけを、質問の解説の材料に覚えておく
+  on('prompt.submit', async ($, e, next) => {
+    const kind = e.origin.kind
+    fromUser = kind === 'composer' || kind === 'bridge' || kind === 'sdk'
+    if (fromUser && e.text.trim()) {
+      await update($, prompts, list => [...list, e.text.slice(0, 600)].slice(-PROMPTS_MAX)).catch(ignore)
+    }
+
+    return next(e)
+  })
 
   on('session.start', async ($, e, next) => {
     const t = await $.clock.now()
@@ -273,16 +388,19 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     const t = await $.clock.now()
+    // ホットリロードで prompt.submit の記録が消えていたら、入力があるかどうかで決める
+    const fresh = e.text !== '' && (fromUser ?? true)
+    fromUser = undefined
     await update($, cats, list =>
       upsert(
         list,
         MAIN_ID,
-        // 入力のないターン（子猫の完了を受けての続きなど）は、同じ作業の続きとみなす
+        // ユーザーの入力でないターン（子猫の完了通知を受けての続きなど）は、同じ作業の続きとみなす
         cat => ({
           ...withoutAsking(withoutEnd(withoutCurrent(cat))),
           status: 'running',
           startedAt: t,
-          taskAt: e.text || cat.taskAt === undefined ? t : cat.taskAt,
+          taskAt: fresh || cat.taskAt === undefined ? t : cat.taskAt,
         }),
         () => ({ ...newBoss(t), taskAt: t }),
       ),
@@ -399,6 +517,12 @@ export const register: Register = (on, options) => {
       return out
     })
     if (found.length > 0) await update($, links, list => found.reduce(addLink, list))
+    // 裏で動いた子猫は、最後の報告を SubagentHandback の message で親に渡す（turn.complete の answer は空になる）
+    const handback = tool === 'SubagentHandback' && e.agentId ? str(args.message) : undefined
+    if (e.agentId && handback) {
+      const kittenId = e.agentId
+      await update($, reports, map => rememberReport(map, kittenId, handback))
+    }
     await changed($)
     let result: Awaited<ReturnType<typeof next>> | undefined
     try {
@@ -416,7 +540,9 @@ export const register: Register = (on, options) => {
           const recent = [summary, ...cat.recent].slice(0, RECENT_MAX)
           // 並列で呼んだほかのツールが current を上書きしていたら消さない
           const done = cat.currentId === e.tool_use_id ? { ...withoutCurrent(cat), recent } : { ...cat, recent }
-          const failed = result !== undefined && 'isError' in result && result.isError === true
+          // 質問を答えずに閉じたのは失敗ではない（質問の hook が黙らせる）
+          const failed =
+            tool !== 'AskUserQuestion' && result !== undefined && 'isError' in result && result.isError === true
           // 許可を待っていたなら、許可・拒否のどちらでもここで終わっている
           const answered = withoutAsking(done)
           return releaseHold(failed ? speak(answered, pickLine('error', id, end), end) : answered, e.tool_use_id, end)
@@ -424,6 +550,68 @@ export const register: Register = (on, options) => {
       )
       await changed($)
     }
+  })
+
+  // 質問：質問した猫が「聞きたいニャ」としゃべり、質問と解説と答えを部屋に残す（ビューアが吹き出しに出す）
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const catId = e.agentId ?? MAIN_ID
+    const t = await $.clock.now()
+    const id = e.tool_use_id
+    const ask: Ask = {
+      id,
+      catId,
+      askedAt: t,
+      questions: toQuestions(e.questions),
+      status: 'open',
+      answers: {},
+      explain: explainOn ? 'pending' : 'off',
+    }
+    await update($, asks, list => addAsk(list, ask))
+    // 「聞きたいニャ」は答えるまで出し続け、答えたら復唱に、答えずに閉じたら黙る
+    const asking = pickLine('question', catId, t)
+    const settle = (line: string | undefined, at: number) =>
+      update($, cats, list =>
+        list.map(cat => {
+          if (cat.id !== catId) return cat
+          if (line) return speak(cat, line, at)
+          return cat.say?.text === asking ? withoutSay(cat) : cat
+        }),
+      )
+    await update($, cats, list => list.map(cat => (cat.id === catId ? speak(cat, asking, t, ASK_SAY_MS) : cat)))
+    await changed($)
+    if (explainOn) {
+      $.clock.after(
+        0,
+        () =>
+          void explainAsk($, id).catch(() =>
+            update($, asks, list => updateAsk(list, id, one => ({ ...one, explain: 'error' })))
+              .then(() => changed($))
+              .catch(ignore),
+          ),
+      )
+    }
+
+    let ran: Awaited<ReturnType<typeof next>>
+    try {
+      ran = await next(e)
+    } catch (error) {
+      // 中断で答えが来なくても、回答待ちのまま残さない
+      await update($, asks, list => updateAsk(list, id, one => ({ ...one, status: 'cancelled' }))).catch(ignore)
+      await settle(undefined, t).catch(ignore)
+      publishSoon($)
+      throw error
+    }
+    const answers = ran.deny === undefined && !ran.isError ? answersOf(ran.result) : undefined
+    const end = await $.clock.now()
+    const done = await update($, asks, list =>
+      updateAsk(list, id, one => (answers ? { ...one, status: 'answered', answers } : { ...one, status: 'cancelled' })),
+    )
+    // 答えをもらったら、選んだものを復唱する
+    const answered = done.find(one => one.id === id)
+    await settle(answered && answers ? answeredLine(answered) : undefined, end)
+    await changed($)
+
+    return ran
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -453,7 +641,14 @@ export const register: Register = (on, options) => {
     await changed($)
     // 結果の要約は時間がかかるので、ターンの終わりを待たせずタイマーから裏で動かす
     const agentId = e.agentId
-    const answer = e.answer.trim()
+    // 裏で動いた子猫は e.answer が空で届く（報告は SubagentHandback で渡していて、tool.call で覚えてある）
+    const handedBack = agentId ? (await read($, reports))[agentId] : undefined
+    const answer = e.answer.trim() || (e.reason === 'answer' ? (handedBack ?? '') : '')
+    // 結果の本文は質問の解説の材料に覚えておき、回答待ちの質問があれば解説を作り直す
+    if (agentId && e.reason === 'answer' && answer && answer !== handedBack) {
+      await update($, reports, map => rememberReport(map, agentId, answer))
+    }
+    if (explainOn && agentId && e.reason !== 'aborted') await reviseAsks($, agentId)
     if (summaryOn && agentId && e.reason === 'answer' && answer) {
       $.clock.after(0, () => void summarizeReport($, agentId, answer).catch(ignore))
     }
@@ -480,6 +675,8 @@ export const register: Register = (on, options) => {
 
   // 許可ダイアログが出る直前。どの猫が許可を待っているかを覚えて、しゃべらせる
   on('classic.PermissionRequest', async ($, e, next) => {
+    // 質問のダイアログは許可待ちではない（質問として別に扱う）
+    if (e.tool_name === 'AskUserQuestion') return next(e)
     const id = e.agent_id ?? MAIN_ID
     const t = await $.clock.now()
     await update($, cats, list =>
@@ -499,6 +696,11 @@ export const register: Register = (on, options) => {
       await update($, cats, () => [newBoss(t)])
       await update($, files, () => ({}))
       await update($, links, () => [])
+      await update($, asks, () => [])
+      await update($, prompts, () => [])
+      await update($, reports, () => ({}))
+      for (const waiting of revisions.values()) waiting.timer.cancel()
+      revisions.clear()
       // /clear の後は新しいセッション id で、まっさらな部屋を書き出し直す
       await changed($)
     }

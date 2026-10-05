@@ -1,5 +1,5 @@
 // ほかのタブ（セッション）とねこ部屋を共有する。$ に触らない純粋なロジック。
-import type { Cat, Link, Room } from '../types'
+import type { Ask, Cat, Link, Room } from '../types'
 import { MAIN_ID } from './cats'
 
 /** ホームディレクトリの下の、部屋のファイルを置く場所 */
@@ -25,6 +25,7 @@ export function snapshot(
   t: number,
   cats: readonly Cat[],
   links: readonly Link[],
+  asks: readonly Ask[],
   closed = false,
 ): Room {
   return {
@@ -34,12 +35,13 @@ export function snapshot(
     ...(closed ? { closed: true } : {}),
     cats: cats.filter(cat => !cat.room),
     links: [...links],
+    ...(asks.length > 0 ? { asks: [...asks] } : {}),
   }
 }
 
 /** 書き出すかどうかを比べるための中身（時刻を除く） */
 export const contentKey = (room: Room) =>
-  JSON.stringify({ closed: room.closed ?? false, cats: room.cats, links: room.links })
+  JSON.stringify({ closed: room.closed ?? false, cats: room.cats, links: room.links, asks: room.asks ?? [] })
 
 export function isLive(room: Room, t: number): boolean {
   return !room.closed && t - room.updatedAt < STALE_MS
@@ -60,6 +62,7 @@ export function parseRoom(text: string): Room | undefined {
       ...(room.closed ? { closed: true } : {}),
       cats: room.cats,
       links: Array.isArray(room.links) ? room.links : [],
+      ...(Array.isArray(room.asks) && room.asks.length > 0 ? { asks: room.asks } : {}),
     }
   } catch {
     return undefined
@@ -79,6 +82,11 @@ export function foreignCats(room: Room): Cat[] {
       ...(cat.trip ? { trip: { ...cat.trip, to: prefix(cat.trip.to) } } : {}),
     }
   })
+}
+
+/** ほかのタブの質問。質問した猫の id を foreignCats と同じ「セッション/id」にそろえる */
+export function foreignAsks(room: Room): (Ask & { room: string })[] {
+  return (room.asks ?? []).map(ask => ({ ...ask, catId: `${room.session}/${ask.catId}`, room: room.session }))
 }
 
 export function foreignLinks(room: Room): Link[] {
