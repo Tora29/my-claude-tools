@@ -168,7 +168,7 @@ describe('frame', () => {
     ...extra,
   })
 
-  test('回答待ちの質問は、質問した猫が中身と解説をしゃべり、これまでの答えを並べる', () => {
+  test('回答待ちの質問は、質問した猫が何について聞くかと解説をしゃべり、これまでの答えを並べる', () => {
     const past = ask({
       id: 'old',
       askedAt: T - 1000,
@@ -179,8 +179,9 @@ describe('frame', () => {
     const text = lines.join('\n')
     expect(text).toContain('┄┄ ボスの質問（回答待ち）')
     expect(text).toContain('ボス「方式について聞きたいニャ」')
-    expect(text).toContain('[方式] Q1. どの方式でログインを作りますか？')
-    expect(text).toContain('1. OAuth — 外部のアカウントで入る')
+    // 質問文と選択肢は Claude Code の画面に出ているので出さない
+    expect(text).not.toContain('Q1.')
+    expect(text).not.toContain('外部のアカウントで入る')
     expect(text).toContain('【なぜ聞いているか】')
     expect(text).toContain('→ 1. OAuth: 楽ニャ')
     expect(text).toContain('これまでの答え')
@@ -325,6 +326,19 @@ describe('猫の詳細', () => {
     expect(text).toContain('報告：useAuth が重複してたニャ')
     expect(text).toContain('最近の操作（新しい順）')
     expect(text.indexOf('Grep "useAuth"')).toBeLessThan(text.indexOf('Read room.ts'))
+  })
+
+  test('詳細を見ている猫の報告は、図の下に重ねて出さない', () => {
+    const r = busy(room('a', 'alpha'))
+    const [boss, kitten] = r.cats
+    const reported: Room = { ...r, cats: [boss!, { ...kitten!, status: 'completed', endedAt: T, summaryAt: T }] }
+    const body = (selected?: string) =>
+      frame([reported], T, 80, selected ? { selected } : {})
+        .lines.map(stripAnsi)
+        .join('\n')
+    expect(body()).toContain('ソラの報告：useAuth が重複してたニャ')
+    expect(body('a/k-a')).not.toContain('ソラの報告')
+    expect(body('a/main')).toContain('ソラの報告：useAuth が重複してたニャ')
   })
 
   test('行数が足りなければ古い操作から削り、何件出したかを書く', () => {
