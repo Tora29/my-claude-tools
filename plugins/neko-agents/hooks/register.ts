@@ -24,6 +24,7 @@ import {
   RECENT_MAX,
   releaseHold,
   resolveTarget,
+  SAY_MS,
   speak,
   startTrip,
   str,
@@ -72,7 +73,7 @@ const reports = atom({ plugin: 'neko-agents', key: 'reports' } as const, {})
 
 const SUMMARY_SYSTEM = [
   'あなたは猫です。渡される文章は、あなた（子猫）がこなした調査や作業の結果です。',
-  '親猫への報告として、いちばん大事な発見や結果を 1 文にまとめてください。',
+  'いちばん大事な発見や結果を、報告の中身だけ 1 文にまとめてください。「〜への報告ニャ」のような前置きは付けないでください。',
   '語尾は「ニャ」にして、25 文字以内で答えてください。前置き・引用符・改行は付けないでください。',
 ].join('\n')
 
@@ -255,7 +256,8 @@ async function summarizeReport($: Dollar, id: string, answer: string) {
       if (trip?.reason !== 'report') return withSummary
       // 着く前なら着いたときに、滞在中ならすぐに言う（部屋を出た後は記録だけ）
       if (trip.phase === 'leave' || trip.phase === 'arrive') {
-        return speak(withSummary, summary, Math.max(t, cat.say?.from ?? t), SUMMARY_SAY_MS)
+        const arrival = trip.at + (trip.phase === 'leave' ? 2 : 1) * WALK_MS
+        return speak(withSummary, summary, Math.max(t, arrival), SUMMARY_SAY_MS)
       }
       if (trip.phase === 'stay') return speak(withSummary, summary, t, SUMMARY_SAY_MS)
       return withSummary
@@ -630,11 +632,20 @@ export const register: Register = (on, options) => {
       // 報告：終わった子猫が親の部屋へ報告に行く（中断はしない）
       const done = e.agentId ? out.find(cat => cat.id === e.agentId) : undefined
       if (done && e.reason !== 'aborted') {
-        out = startTrip(out, done.id, parentOf(done, ids), 'report', t)
-        // 報告先に着いたころにしゃべる
+        const parent = parentOf(done, ids)
+        out = startTrip(out, done.id, parent, 'report', t)
         const reporting = out.find(cat => cat.id === done.id)?.trip?.reason === 'report'
-        const line = pickLine(e.reason === 'answer' ? 'done' : 'failed', done.id, t)
-        out = out.map(cat => (cat.id === done.id ? speak(cat, line, reporting ? t + 2 * WALK_MS : t) : cat))
+        const parentName = out.find(cat => cat.id === parent)?.name
+        out = out.map(cat => {
+          if (cat.id !== done.id) return cat
+          // うまくいった子猫は歩きながら「ボスへ報告ニャ！」などと言い、着いて少しするまで言い続ける（要約が届けば着いたときに替わる）
+          if (reporting && parentName && e.reason === 'answer') {
+            return speak(cat, pickLine('report', done.id, t).replace('{to}', parentName), t, 2 * WALK_MS + SAY_MS)
+          }
+          // それ以外は報告先に着いたころにしゃべる
+          const line = pickLine(e.reason === 'answer' ? 'done' : 'failed', done.id, t)
+          return speak(cat, line, reporting ? t + 2 * WALK_MS : t)
+        })
       }
       return out
     })

@@ -119,7 +119,7 @@ export function buildScene(input: SceneInput) {
         : cat.id === selectedId
           ? { highlight: 'selected' as const }
           : {}),
-      art: trip ? AWAY_ART : catArt(cat, frame),
+      art: trip ? AWAY_ART : catArt(cat, t),
       coat: coatOf(cat),
       name: cat.name,
       elapsed: formatElapsed(elapsedOf(cat, t)),

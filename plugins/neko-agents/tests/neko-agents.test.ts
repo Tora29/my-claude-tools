@@ -4,6 +4,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import {
   advanceTrip,
+  catArt,
   CHAT_EVERY_MS,
   chatter,
   cleanSummary,
@@ -274,10 +275,13 @@ describe('猫の記録', () => {
     expect(catOf(room, 'agent-oops')).toMatchObject({ status: 'failed', trip: { reason: 'report' } })
     expect(catOf(room, 'agent-stop')?.status).toBe('killed')
     expect(catOf(room, 'agent-stop')?.trip).toBeUndefined()
-    // 報告のセリフは、親の部屋に着いたころから
+    // うまくいった子猫は歩きながら親の名前を呼び、失敗した子猫は親の部屋に着いたころにしゃべる
     const ok = catOf(room, 'agent-ok')
-    expect(LINES.done.some(line => line === ok?.say?.text)).toBe(true)
-    expect(ok?.say?.from).toBeGreaterThan(clock.now() - 600)
+    expect(LINES.report.map(line => line.replace('{to}', 'ボス'))).toContain(ok?.say?.text ?? '')
+    const oops = catOf(room, 'agent-oops')
+    expect(LINES.failed.some(line => line === oops?.say?.text)).toBe(true)
+    expect(oops?.say?.from).toBeGreaterThan(clock.now() - 600)
+    expect(ok?.say?.from ?? Infinity).toBeLessThan(oops?.say?.from ?? 0)
   })
 
   test('許可待ちの間だけ asking が付く', async ($, on) => {
@@ -730,6 +734,9 @@ describe('純粋なロジック', () => {
 
   test('要約は最初の 1 行の引用符を外し、指示より長くても SUMMARY_MAX 文字までは切らない', () => {
     expect(cleanSummary('\n「見つけたニャ」\n補足')).toBe('見つけたニャ')
+    expect(cleanSummary('親猫へのご報告ニャ：重複が3件あったニャ')).toBe('重複が3件あったニャ')
+    expect(cleanSummary('「ボスへ報告ニャ！ 型エラーは直ったニャ」')).toBe('型エラーは直ったニャ')
+    expect(cleanSummary('報告書の誤字を直したニャ')).toBe('報告書の誤字を直したニャ')
     const long = `ポリシー文書を版0.08から0.09に更新し、根拠ある19件を修正、方針判断1件を残したニャ`
     expect(cleanSummary(long)).toBe(long)
     expect(cleanSummary('あ'.repeat(SUMMARY_MAX + 10))).toHaveLength(SUMMARY_MAX)
@@ -802,6 +809,27 @@ describe('純粋なロジック', () => {
     const bored = times.map(t => chatter(boss, t, true)).filter(cat => cat.say)
     expect(bored.length).toBeGreaterThan(0)
     expect(bored.every(cat => LINES.bored.some(line => line === cat.say?.text))).toBe(true)
+  })
+
+  test('作業中の猫は気まぐれに足を動かしてキョロキョロし、待っている猫はまばたきだけする', () => {
+    // 1 分間を 0.2 秒ごとに描いたときの顔と足
+    const times = Array.from({ length: 300 }, (_, i) => i * 200)
+    const runner = kitten('agent-art', { status: 'running' })
+    const arts = times.map(t => catArt(runner, t))
+    expect(arts.every(art => art.every(line => line.length === 7))).toBe(true)
+    const faces = new Set(arts.map(art => art[1]))
+    for (const face of ['( o.o )', '(o.o  )', '(  o.o)']) expect(faces.has(face)).toBe(true)
+    expect([...faces].some(face => face.includes('-.-'))).toBe(true)
+    expect(new Set(arts.map(art => art[2]))).toEqual(new Set([' /| |\\ ', ' \\| |/ ']))
+    // 同じ 1 秒の中では、まばたき以外は変わらない（描き直してもチラつかない）
+    expect(catArt(runner, 5000)[2]).toBe(catArt(runner, 5800)[2])
+    // 猫ごとにばらばらに動く
+    const other = kitten('agent-art-2', { status: 'running' })
+    expect(times.some(t => catArt(runner, t).join() !== catArt(other, t).join())).toBe(true)
+
+    const waiter = kitten('agent-wait', { status: 'waiting' })
+    const waits = new Set(times.map(t => catArt(waiter, t).join('|')))
+    expect(waits).toEqual(new Set([' /\\_/\\ |( o.o )| /| |\\ ', ' /\\_/\\ |( -.- )| /| |\\ ']))
   })
 
   test('同じ 30 秒の間に二度はしゃべらない', () => {

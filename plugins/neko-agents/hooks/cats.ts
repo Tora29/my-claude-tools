@@ -116,11 +116,10 @@ export const isActive = (cat: Cat) => ACTIVE.includes(cat.status)
 
 export type Art = readonly [string, string, string]
 
-/** 箱の中の 3 行の半角アスキーアート（幅 7）。frame は running のパタパタ用 */
+/** 箱の中の 3 行の半角アスキーアート（幅 7）。動きのない基本の絵で、frame は idle の zzz 用 */
 export function artOf(status: CatStatus, frame: number): Art {
   switch (status) {
     case 'running':
-      return frame % 2 === 0 ? [' /\\_/\\ ', '( o.o )', ' /| |\\ '] : [' /\\_/\\ ', '( o.o )', ' \\| |/ ']
     case 'pending':
     case 'waiting':
       return [' /\\_/\\ ', '( o.o )', ' /| |\\ ']
@@ -128,7 +127,7 @@ export function artOf(status: CatStatus, frame: number): Art {
       // 頭の上の zzz が 1 秒ごとに増えていく
       return [cycle(ZZZ, frame), ' /\\_/\\ ', '( -.- )']
     case 'completed':
-      return [' /\\_/\\ ', '( ^.^ )', ' (")(")']
+      return [' /\\_/\\ ', '( ^.^ )', '(") (")']
     case 'failed':
       return [' /\\_/\\ ', '( >.< )', ' /| |\\ ']
     case 'killed':
@@ -138,10 +137,53 @@ export function artOf(status: CatStatus, frame: number): Art {
 
 const ZZZ = ['     z ', '    zZ ', '   zZz '] as const
 
-/** 状態に加えて、許可待ちを反映した絵 */
-export function catArt(cat: Cat, frame: number): Art {
-  if (cat.asking) return [' /\\_/\\?', '( o.o )', ' /| |\\ ']
-  return artOf(cat.status, frame)
+type Look = 'center' | 'left' | 'right'
+
+/** 顔の向き。真ん中を多めにして、ときどき左右を見る */
+const LOOKS: readonly [Look, ...Look[]] = ['center', 'center', 'left', 'right']
+/** 1 秒のうちにまばたきする確率（%）と、目を閉じている長さ */
+const BLINK_CHANCE = 15
+const BLINK_MS = 250
+
+/**
+ * 気まぐれな猫の動き。1 秒ごとに id と時刻のハッシュで決めるので、猫ごとにばらばらに動き、
+ * 0.2 秒ごとに描き直してもチラつかない（乱数を使わないのでテストで再現できる）
+ */
+function moodOf(id: string, t: number) {
+  const roll = hash(`art:${id}:${Math.floor(t / 1000)}`)
+  // まばたきは 1 秒のうちのどこかで始まる
+  const start = (roll >>> 16) % (1000 - BLINK_MS)
+  const at = t % 1000
+  return {
+    look: cycle(LOOKS, roll),
+    flap: ((roll >>> 2) & 1) === 1,
+    blink: (roll >>> 3) % 100 < BLINK_CHANCE && at >= start && at < start + BLINK_MS,
+  }
+}
+
+function face(eyes: string, look: Look): string {
+  if (look === 'left') return `(${eyes}  )`
+  if (look === 'right') return `(  ${eyes})`
+  return `( ${eyes} )`
+}
+
+/**
+ * 状態と許可待ちを反映した、その時刻の絵（t はミリ秒）。作業中の猫は足をパタパタさせて
+ * キョロキョロし、作業中・待っている猫はときどきまばたきする
+ */
+export function catArt(cat: Cat, t: number): Art {
+  const { look, flap, blink } = moodOf(cat.id, t)
+  const eyes = blink ? '-.-' : 'o.o'
+  if (cat.asking) return [' /\\_/\\?', face(eyes, 'center'), ' /| |\\ ']
+  switch (cat.status) {
+    case 'running':
+      return [' /\\_/\\ ', face(eyes, look), flap ? ' \\| |/ ' : ' /| |\\ ']
+    case 'pending':
+    case 'waiting':
+      return [' /\\_/\\ ', face(eyes, 'center'), ' /| |\\ ']
+    default:
+      return artOf(cat.status, Math.floor(t / 1000))
+  }
 }
 
 /** 出かけている猫の部屋（座布団だけ） */
@@ -492,6 +534,14 @@ export const LONG_MS = 120_000
 
 export const LINES = {
   spawn: ['いってくるニャ！', 'まかせるニャ！'],
+  // 報告に行く途中のセリフ。{to} は報告先の猫の名前
+  report: [
+    '{to}へ報告ニャ！',
+    '{to}〜、できたニャ！',
+    '{to}に見せに行くニャ',
+    '{to}、聞いてほしいニャ！',
+    'いい知らせニャ、{to}！',
+  ],
   error: ['あれ？おかしいニャ', 'うにゃ…失敗ニャ'],
   review: ['どれどれ…ニャ', 'ちょっと見せるニャ'],
   letter: ['お手紙ニャ', 'これ読んでほしいニャ'],
@@ -540,7 +590,11 @@ export function cleanSummary(text: string): string {
       .split('\n')
       .map(part => part.trim())
       .find(part => part.length > 0) ?? ''
-  return truncate(line.replace(/^[「『"']+|[」』"']+$/g, ''), SUMMARY_MAX)
+  // 「親猫へのご報告ニャ：」のような前置きは、図の下に「〇〇の報告：」と出すので外す
+  const body = line
+    .replace(/^[「『"']+|[」』"']+$/g, '')
+    .replace(/^[^：:、。！!]{0,12}報告(です)?ニャ[〜ー]?[：:、。！!]\s*/, '')
+  return truncate(body, SUMMARY_MAX)
 }
 
 /** 今の作業（ボスの taskAt 以降）で起動された子猫 */
