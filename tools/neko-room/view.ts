@@ -385,7 +385,7 @@ function pastLines(
 }
 
 /**
- * 図の下に出す、質問の吹き出し。回答待ちの質問があれば、質問した猫が質問の中身と
+ * 図の下に出す、質問の吹き出し。回答待ちの質問があれば、質問した猫が何について聞くかと
  * 猫口調の解説をしゃべり、同じタブの過去の答えを並べる。history なら全部の質問の記録を出す
  */
 export function askLines(scene: Scene, width: number, history = false, key?: string): Line[] {
@@ -398,8 +398,8 @@ export function askLines(scene: Scene, width: number, history = false, key?: str
   for (const ask of open) {
     const name = scene.nameOf(ask.catId)
     lines.push(rule(`${name}の質問（回答待ち）${label(ask)}`, width))
+    // 質問文と選択肢は Claude Code の画面に出ているので、ここでは何について聞いているかだけ言う
     lines.push(...out(`${name}「${topicOf(ask)}について聞きたいニャ」`, width, { color: REPORT_COLOR }))
-    lines.push(...questionLines(ask, width))
     // 回答待ちの間に子猫の報告が届いたら、前の解説を出したまま考え直す
     const revised = ask.revisedFor?.join('・')
     if (ask.explain === 'pending') {

@@ -97,10 +97,11 @@ export function frame(rooms: readonly Room[], t: number, width: number, options:
   // 報告と質問は、そのタブの区画の中（図のすぐ下）に出す。key を省くと全タブ分
   const below = (key?: string) => {
     const reported = reportedIn(scene, key)
-    // 報告は切らずに折り返す（2 行目からは字下げ）
-    const report = reported
-      ? wrap(reportLine(reported), width, '  ').map(line => paint(fit(line, width), { color: REPORT_COLOR }))
-      : []
+    // 報告は切らずに折り返す（2 行目からは字下げ）。詳細を見ている猫の報告は詳細の中に出すので、ここでは出さない
+    const report =
+      reported && reported.id !== selected
+        ? wrap(reportLine(reported), width, '  ').map(line => paint(fit(line, width), { color: REPORT_COLOR }))
+        : []
     const questions = askLines(scene, width, history, key).map(line => paintLine(line, width))
     return [...report, ...questions]
   }
@@ -157,12 +158,13 @@ function main() {
     const width = out.columns || 80
     const height = out.rows || 24
     const t = Date.now()
-    // 詳細は画面の下半分まで
-    const detailRows = Math.max(4, Math.floor((height - 1) / 2))
+    // 詳細は画面の下半分まで（上の空き 1 行を含む）
+    const detailRows = Math.max(4, Math.floor((height - 1) / 2) - 1)
     const drawn = frame(loadRooms(dir, t), t, width, { history, ...(selected ? { selected } : {}), detailRows })
     const { lines, detail } = drawn
     hits = drawn.hits
-    body = Math.max(1, height - 1 - detail.length)
+    // 詳細の上は 1 行空けて、図の下の報告や質問とくっつかないようにする
+    body = Math.max(1, height - 1 - (detail.length > 0 ? detail.length + 1 : 0))
     total = lines.length
     const box = reveal ? hits.find(hit => hit.id === selected) : undefined
     if (box) scroll = Math.min(box.top, Math.max(scroll, box.bottom - body))
