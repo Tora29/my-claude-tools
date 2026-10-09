@@ -177,17 +177,44 @@ describe('frame', () => {
     })
     const lines = linesOf([room('a', 'alpha', { asks: [past, ask()] })], T, 80).map(stripAnsi)
     const text = lines.join('\n')
-    expect(text).toContain('┄┄ ボスの質問（回答待ち）')
-    expect(text).toContain('ボス「方式について聞きたいニャ」')
+    expect(text).toContain(' 回答待ち  ボスの質問「方式」')
+    expect(text).toContain('ボス「答える前に聞いてほしいニャ」')
     // 質問文と選択肢は Claude Code の画面に出ているので出さない
     expect(text).not.toContain('Q1.')
     expect(text).not.toContain('外部のアカウントで入る')
-    expect(text).toContain('【なぜ聞いているか】')
+    expect(text).toContain('なぜ聞いているか')
     expect(text).toContain('→ 1. OAuth: 楽ニャ')
-    expect(text).toContain('これまでの答え')
+    expect(text).toContain('▍これまでの答え')
     expect(text).toContain('ボス：[方式] どの方式でログインを作りますか？ → OAuth')
     // 箱の 2 行目も回答待ちになる
     expect(text).toContain('? 回答待ち「方式」')
+  })
+
+  test('解説は節ごとに色を分け、選択肢の番号とラベル、おすすめを目立たせる', () => {
+    const explanation = [
+      '### なぜ聞いているか',
+      '作り方が 2 つあるニャ',
+      '### 選択肢ごとの影響',
+      '1. OAuth: 楽ニャ',
+      '2. パスワード: 自前ニャ',
+      '### おすすめ',
+      '→ 1. OAuth: 楽ニャ',
+    ].join('\n')
+    const lines = linesOf([room('a', 'alpha', { asks: [ask({ explanation })] })], T, 80)
+    const lineOf = (part: string) => lines.find(line => stripAnsi(line).includes(part)) ?? ''
+    const plain = lines.map(line => stripAnsi(line).trimEnd())
+    // 「回答待ち」は黄色の地のバッジ
+    expect(lineOf('ボスの質問')).toContain('\x1b[48;2;240;198;116m 回答待ち ')
+    // 見出しはピンク、本文は色なし、節の間は 1 行空ける
+    expect(lineOf('なぜ聞いているか')).toContain('\x1b[38;2;255;135;195m')
+    expect(lineOf('作り方が 2 つ')).not.toContain('\x1b[38;2')
+    expect(plain[plain.indexOf('なぜ聞いているか') - 1]).toBe('')
+    expect(plain[plain.indexOf('選択肢ごとの影響') - 1]).toBe('')
+    // 選択肢は番号を水色に、ラベルを太字に
+    expect(plain).toContain('  1 OAuth: 楽ニャ')
+    expect(lineOf('1 OAuth')).toContain('\x1b[38;2;95;215;255m1 \x1b[0m\x1b[1mOAuth\x1b[0m: 楽ニャ')
+    // おすすめは緑
+    expect(lineOf('→ 1. OAuth')).toContain('\x1b[38;2;139;209;124m')
   })
 
   test('答えたあとは最後の答えだけを出し、h で記録を開くと選んだものに ✔ が付く', () => {
@@ -196,7 +223,7 @@ describe('frame', () => {
     })
     const closed = linesOf([answered], T, 80).map(stripAnsi)
     expect(closed.at(-1)).toContain('→ パスワード（h で質問の記録）')
-    expect(closed.join('\n')).not.toContain('【なぜ聞いているか】')
+    expect(closed.join('\n')).not.toContain('なぜ聞いているか')
     const opened = linesOf([answered], T, 80, { history: true }).map(stripAnsi).join('\n')
     expect(opened).toContain('┄┄ 質問の記録（新しい順）')
     expect(opened).toContain('✔ パスワード')
@@ -208,7 +235,7 @@ describe('frame', () => {
       .map(stripAnsi)
       .join('\n')
     expect(thinking).toContain('ボス「ソラの報告が来たから考え直してるニャ…」')
-    expect(thinking).toContain('【なぜ聞いているか】')
+    expect(thinking).toContain('なぜ聞いているか')
     const revised = linesOf([room('a', 'alpha', { asks: [ask({ revisedFor: ['ソラ', 'クロ'] })] })], T, 80)
       .map(stripAnsi)
       .join('\n')
@@ -238,10 +265,10 @@ describe('frame', () => {
     const rowOf = (part: string) => lines.findIndex(line => line.includes(part))
     expect(rowOf('ソラの報告：alpha で見つけたニャ')).toBeGreaterThan(rowOf('── alpha'))
     expect(rowOf('ソラの報告：alpha で見つけたニャ')).toBeLessThan(rowOf('── beta'))
-    expect(rowOf('┄┄ ボスの質問（回答待ち）')).toBeGreaterThan(rowOf('── alpha'))
-    expect(rowOf('┄┄ ボスの質問（回答待ち）')).toBeLessThan(rowOf('── beta'))
+    expect(rowOf('回答待ち  ボスの質問')).toBeGreaterThan(rowOf('── alpha'))
+    expect(rowOf('回答待ち  ボスの質問')).toBeLessThan(rowOf('── beta'))
     // 区画の見出しがあるので、質問の見出しにタブの名前は付けない
-    expect(lines.some(line => line.includes('回答待ち）（alpha）'))).toBe(false)
+    expect(lines.some(line => line.includes('「方式」（alpha）'))).toBe(false)
   })
 
   test('幅が狭くても、過去の答えは切らずに質問文のほうを縮める', () => {

@@ -13,6 +13,7 @@ import {
   askLines,
   buildScene,
   detailLines,
+  fitRuns,
   headline,
   type Line,
   narrowLines,
@@ -72,7 +73,9 @@ export type Frame = {
 }
 
 const paintLine = (line: Line, width: number) =>
-  paint(fit(line.text, width), { color: line.color, bold: line.bold, dim: line.dim })
+  line.runs
+    ? toAnsi(fitRuns(line.runs, width))
+    : paint(fit(line.text, width), { color: line.color, bold: line.bold, dim: line.dim })
 
 export function frame(rooms: readonly Room[], t: number, width: number, options: FrameOptions = {}): Frame {
   const { history = false, selected } = options

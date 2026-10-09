@@ -22,7 +22,17 @@ import {
 import { answerLine, FREEFORM, isChosen } from '../../plugins/neko-agents/hooks/questions'
 import { foreignAsks, foreignCats, foreignLinks } from '../../plugins/neko-agents/hooks/rooms'
 import type { Ask, Cat, Link, Room } from '../../plugins/neko-agents/types'
-import { type BoxContent, charWidth, draw, type Layout, layout, type Run, textWidth, walkerAt } from './graph'
+import {
+  type BoxContent,
+  charWidth,
+  draw,
+  type Layout,
+  layout,
+  type Run,
+  type Style,
+  textWidth,
+  walkerAt,
+} from './graph'
 
 /** 子猫がこの数を超えたら、古い終わった猫から「帰宅した猫」として隠す */
 export const MAX_KITTENS = 6
@@ -224,11 +234,19 @@ export function narrowLines(scene: Scene): { key: string; text: string; color: s
 
 // ---------------------------------------------------------------- 質問の吹き出し
 
-/** 図の下に出す 1 行。幅に折り返し済み */
-export type Line = { text: string; color?: string; bold?: boolean; dim?: boolean }
+/** 図の下に出す 1 行。幅に折り返し済み。runs があれば、text を部分ごとに別の見た目で描く */
+export type Line = { text: string; color?: string; bold?: boolean; dim?: boolean; runs?: Run[] }
 
-/** 選んだ選択肢の色 */
+/** 選んだ選択肢と、おすすめの色 */
 export const CHOSEN_COLOR = '#8bd17c'
+/** 解説の節の見出し */
+const HEADING_COLOR = '#ff87c3'
+/** 解説の選択肢の番号 */
+const NUMBER_COLOR = '#5fd7ff'
+/** 解説の下の節（これまでの答え）の見出し */
+const SUB_COLOR = '#7aa2f7'
+/** 「回答待ち」のバッジ（黄色の地に黒い字） */
+const BADGE: Style = { color: '#1c1c1c', bg: REPORT_COLOR, bold: true }
 /** 質問した猫が回答の記録で過去の答えを並べる数 */
 const PAST_MAX = 5
 
@@ -301,27 +319,122 @@ export function wrap(text: string, width: number, indent = ''): string[] {
 const out = (text: string, width: number, style: Omit<Line, 'text'> = {}, indent = ''): Line[] =>
   wrap(text, width, indent).map(part => ({ text: part, ...style }))
 
-/** 猫口調の解説（### 見出し付きの Markdown）を、吹き出しの行にする */
+/** 行の頭に by を足す（部分ごとの見た目があれば、それも足す） */
+const shift = (line: Line, by = '  '): Line => ({
+  ...line,
+  text: by + line.text,
+  ...(line.runs ? { runs: [{ text: by, style: {} }, ...line.runs] } : {}),
+})
+
+/**
+ * 見た目の違う部分（runs）をつないで折り返す。折り返したあとも文字ごとに元の見た目を保つ。
+ * wrap と同じく空白をまとめて両端を落としてから折り返し、折り返しで落ちた空白は飛ばして対応を取る
+ */
+function outRuns(runs: readonly Run[], width: number, indent = ''): Line[] {
+  const chars: { ch: string; style: Style }[] = []
+  for (const run of runs) {
+    for (const ch of run.text.replace(/\s/g, ' ')) {
+      if (ch === ' ' && (chars.length === 0 || chars.at(-1)?.ch === ' ')) continue
+      chars.push({ ch, style: run.style })
+    }
+  }
+  while (chars.at(-1)?.ch === ' ') chars.pop()
+  let at = 0
+  return wrap(chars.map(c => c.ch).join(''), width, indent).map((part, i) => {
+    const line: Run[] = i > 0 && indent ? [{ text: indent, style: {} }] : []
+    for (const ch of i > 0 ? part.slice(indent.length) : part) {
+      while (at < chars.length && chars[at]?.ch !== ch) at++
+      const style = chars[at++]?.style ?? {}
+      const last = line.at(-1)
+      if (last?.style === style) last.text += ch
+      else line.push({ text: ch, style })
+    }
+    return { text: part, runs: line }
+  })
+}
+
+/** 部分ごとの見た目を保ったまま width 桁に収める。はみ出す分は … で切り、足りない分は空白で埋める */
+export function fitRuns(all: readonly Run[], width: number): Run[] {
+  const runs = all.filter(run => run.text)
+  const total = textWidth(runs.map(run => run.text).join(''))
+  if (total <= width) return [...runs, { text: ' '.repeat(Math.max(0, width - total)), style: {} }]
+  const fitted: Run[] = []
+  let used = 0
+  for (const run of runs) {
+    let text = ''
+    for (const ch of run.text) {
+      const w = charWidth(ch)
+      if (used + w > width - 1) {
+        fitted.push({ text: `${text}…`, style: run.style })
+        return [...fitted, { text: ' '.repeat(Math.max(0, width - used - 1)), style: {} }]
+      }
+      text += ch
+      used += w
+    }
+    fitted.push({ text, style: run.style })
+  }
+  return fitted
+}
+
+/** 解説の節の見出し（### いまの指示 など）。節の間は 1 行空ける */
+const SECTION = /^\s{0,3}(#{1,6})\s+(.*)$/
+/** 選択肢ごとの影響の 1 行：「1. ラベル: 影響」 */
+const OPTION = /^\s*(\d+)[.)．]\s*(.+?)\s*[:：]\s*(.*)$/
+
+/**
+ * 猫口調の解説（### 見出し付きの Markdown）を、吹き出しの行にする。
+ * 見出しはピンク、選択肢は番号を水色・ラベルを太字に、おすすめ（→ …）は緑にして、節の間を 1 行空ける
+ */
 function explanationLines(text: string, width: number): Line[] {
-  return text.split('\n').flatMap(raw => {
+  const lines: Line[] = []
+  for (const raw of text.split('\n')) {
     const plain = raw
       .replace(/\*\*|__|`/g, '')
       .replace(/^(\s*)[-*+]\s+/, '$1・')
       .trimEnd()
-    if (!plain.trim()) return []
-    const heading = /^\s{0,3}(#{1,6})\s+(.*)$/.exec(plain)
+    if (!plain.trim()) continue
+    const heading = SECTION.exec(plain)
     if (heading) {
-      const title = heading[2] ?? ''
-      return out(heading[1] === '###' ? `【${title}】` : title, width - 2, { color: REPORT_COLOR, bold: true }).map(
-        line => ({ ...line, text: `  ${line.text}` }),
-      )
+      const [, marks = '', title = ''] = heading
+      // ### は節の見出し（猫のセリフや前の節と 1 行空ける）。#### は質問が複数あるときの「Q1. 見出し」
+      if (marks.length <= 3) {
+        lines.push({ text: '' })
+        lines.push(...out(title, width, { color: HEADING_COLOR, bold: true }, '  '))
+      } else lines.push(...out(title, width - 2, { bold: true }, '  ').map(line => shift(line)))
+      continue
     }
-    const recommend = /^\s*→/.test(plain)
-    return out(plain.trim(), width - 4, { color: REPORT_COLOR, bold: recommend }, '  ').map(line => ({
-      ...line,
-      text: `    ${line.text}`,
-    }))
-  })
+    if (/^\s*→/.test(plain)) {
+      lines.push(...out(plain.trim(), width - 2, { color: CHOSEN_COLOR, bold: true }, '  ').map(line => shift(line)))
+      continue
+    }
+    const option = OPTION.exec(plain)
+    if (option) {
+      const [, number = '', label = '', effect = ''] = option
+      const runs: Run[] = [
+        { text: `${number} `, style: { color: NUMBER_COLOR, bold: true } },
+        { text: label, style: { bold: true } },
+        { text: `: ${effect}`, style: {} },
+      ]
+      lines.push(...outRuns(runs, width - 2, '  ').map(line => shift(line)))
+      continue
+    }
+    lines.push(...out(plain.trim(), width - 2, {}, '').map(line => shift(line)))
+  }
+  return lines
+}
+
+/** 解説の下の節の見出し（▍これまでの答え）。前を 1 行空ける */
+function subHead(title: string): Line[] {
+  return [
+    { text: '' },
+    {
+      text: `▍${title}`,
+      runs: [
+        { text: '▍', style: { color: SUB_COLOR } },
+        { text: title, style: { color: SUB_COLOR, bold: true } },
+      ],
+    },
+  ]
 }
 
 /** 質問の欄の見出し。タブの区画の見出し（── ）と見分けられるよう、字下げして点線で引く */
@@ -397,16 +510,23 @@ export function askLines(scene: Scene, width: number, history = false, key?: str
   const open = asks.filter(ask => ask.status === 'open')
   for (const ask of open) {
     const name = scene.nameOf(ask.catId)
-    lines.push(rule(`${name}の質問（回答待ち）${label(ask)}`, width))
-    // 質問文と選択肢は Claude Code の画面に出ているので、ここでは何について聞いているかだけ言う
-    lines.push(...out(`${name}「${topicOf(ask)}について聞きたいニャ」`, width, { color: REPORT_COLOR }))
+    // 質問文と選択肢は Claude Code の画面に出ているので、ここでは何について聞いているかと、その背景を出す
+    const title = ` ${name}の質問「${topicOf(ask)}」`
+    lines.push({
+      text: ` 回答待ち ${title}${label(ask)}`,
+      runs: [
+        { text: ' 回答待ち ', style: BADGE },
+        { text: title, style: { bold: true } },
+        { text: label(ask), style: { dim: true } },
+      ],
+    })
     // 回答待ちの間に子猫の報告が届いたら、前の解説を出したまま考え直す
     const revised = ask.revisedFor?.join('・')
     if (ask.explain === 'pending') {
       const thinking = revised && ask.explanation ? `${revised}の報告が来たから考え直してるニャ…` : '考え中ニャ…'
-      lines.push(...out(`  ${name}「${thinking}」`, width, { dim: true }))
+      lines.push(...out(`${name}「${thinking}」`, width, { dim: true }))
     }
-    if (ask.explain === 'error') lines.push({ text: `  ${name}「うまく説明できないニャ…」`, dim: true })
+    if (ask.explain === 'error') lines.push({ text: `${name}「うまく説明できないニャ…」`, dim: true })
     if ((ask.explain === 'done' || ask.explain === 'pending') && ask.explanation) {
       if (ask.explain === 'done') {
         const intro = revised ? `${revised}の報告が来たから考え直したニャ` : '答える前に聞いてほしいニャ'
@@ -419,7 +539,7 @@ export function askLines(scene: Scene, width: number, history = false, key?: str
       .slice(-PAST_MAX)
       .reverse()
     if (past.length > 0) {
-      lines.push({ text: '  これまでの答え', bold: true })
+      lines.push(...subHead('これまでの答え'))
       lines.push(...pastLines(past, scene.nameOf, width))
     }
   }
@@ -484,7 +604,7 @@ export function detailLines(scene: Scene, id: string, width: number, rows: numbe
   return [...fixed, { text: `  ${recent.length > 0 ? title : '最近の操作：まだありません'}`, bold: true }, ...shown]
 }
 
-const indent = (line: Line): Line => ({ ...line, text: `  ${line.text}` })
+const indent = (line: Line): Line => shift(line)
 
 /** はみ出す分を … で切る（埋めはしない） */
 function fitText(text: string, width: number): string {
