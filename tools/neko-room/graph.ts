@@ -80,7 +80,7 @@ export function fit(text: string, width: number, align: 'left' | 'right' = 'left
 
 // ---------------------------------------------------------------- 文字の格子
 
-export type Style = { readonly color?: string; readonly dim?: boolean; readonly bold?: boolean }
+export type Style = { readonly color?: string; readonly bg?: string; readonly dim?: boolean; readonly bold?: boolean }
 export type Run = { text: string; style: Style }
 
 const PLAIN: Style = {}
