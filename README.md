@@ -26,12 +26,15 @@ Claude Code まわりの自作ツールをまとめたリポジトリです。Mo
 claude plugin marketplace add Tora29/my-claude-tools
 claude plugin install neko-agents@my-claude-tools
 
-# ビューアを開く（ターミナルの別タブや分割した画面で。bun が必要）
-bun ~/ghq/github.com/Tora29/my-claude-tools/tools/neko-room/room.ts
+# ビューアのコマンドを入れる（bun が必要）
+git clone https://github.com/Tora29/my-claude-tools.git
+cd my-claude-tools && bun link
 
-# よく使うなら alias に
-alias neko='bun ~/ghq/github.com/Tora29/my-claude-tools/tools/neko-room/room.ts'
+# ビューアを開く（ターミナルの別タブや分割した画面で）
+neko-agents
 ```
+
+`bun link` で入れたコマンドは `~/.bun/bin` に置かれるので、ここにパスが通っている必要があります。
 
 ビューアは `q` で終了し、`h` で質問の記録を開閉し、図がはみ出したら `↑` `↓` `PgUp` `PgDn` かマウスのホイールでスクロールします。猫の箱をクリックすると、画面の下にその猫の詳細が出ます（もう一度クリックするか `Esc` で閉じる）。
 
