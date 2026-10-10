@@ -86,7 +86,7 @@ const linesOf = (...args: Parameters<typeof frame>) => frame(...args).lines
 describe('frame', () => {
   test('全タブの猫を、タブごとの区画に分けて描く', () => {
     const lines = linesOf([room('a', 'alpha'), room('b', 'beta')], T, 80).map(stripAnsi)
-    expect(lines[0]).toContain('ねこ部屋 · 作業中の子猫 2 匹 · タブ 2 つ')
+    expect(lines[0]).toContain('ねこエージェント · 作業中の子猫 2 匹 · タブ 2 つ')
     const rowOf = (part: string) => lines.findIndex(line => line.includes(part))
     expect(rowOf('── alpha')).toBeGreaterThan(0)
     expect(rowOf('── beta')).toBeGreaterThan(rowOf('── alpha'))

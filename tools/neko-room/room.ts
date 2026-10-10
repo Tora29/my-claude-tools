@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// ねこ部屋のビューア。各タブの neko-agents が書き出した部屋を読んで、ターミナルの全画面に描く。
+// ねこエージェントのビューア。各タブの neko-agents が書き出した部屋を読んで、ターミナルの全画面に描く。
 // 使い方: bun tools/neko-room/room.ts   （q で終了、↑↓ / PgUp PgDn / ホイールでスクロール、猫をクリックで詳細）
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -81,7 +81,7 @@ export function frame(rooms: readonly Room[], t: number, width: number, options:
   const { history = false, selected } = options
   const scene = buildScene({ mine: [], myLinks: [], others: rooms, t, ...(selected ? { selectedId: selected } : {}) })
   // 文字の行は、色を付ける前に幅ちょうどに収める（図の行はもともと幅ちょうど）
-  const lines = [paint(fit(`ねこ部屋 · ${headline(scene)}`, width), { bold: true })]
+  const lines = [paint(fit(`ねこエージェント · ${headline(scene)}`, width), { bold: true })]
   const hits: Hit[] = []
   const detail = selected
     ? detailLines(scene, selected, width, options.detailRows ?? Number.POSITIVE_INFINITY).map(line =>
