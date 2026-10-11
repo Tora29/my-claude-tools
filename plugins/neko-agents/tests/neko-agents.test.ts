@@ -29,7 +29,7 @@ import {
   splitAnswers,
   toQuestions,
 } from '../hooks/questions'
-import { parseRoom, projectOf } from '../hooks/rooms'
+import { isSessionId, parseRoom, projectOf, roomFile } from '../hooks/rooms'
 import { cleanText } from '../hooks/text'
 import type { Cat, Room } from '../types'
 
@@ -50,7 +50,7 @@ type ToolHook = (e: ToolCallInput) => ToolCallResult | Promise<ToolCallResult>
  * プラグインの下に敷くエンジン役の hook。テストの on は最初に $ を呼ぶ前に
  * 全部登録しておく必要があるので、ツールの答え方もここで受け取る
  */
-function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
+function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' }), session = 'sess-a') {
   const clock = mock.clock(on, { now: 1_000_000 })
   const world = {
     agents: [] as AgentInfo[],
@@ -69,7 +69,7 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
   mock.env(on, { HOME: '/home/test' })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
-  on('session.id', () => ({ value: 'sess-a' }))
+  on('session.id', () => ({ value: session }))
   on('session.cwd', () => ({ value: '/work/my-proj' }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -187,6 +187,14 @@ describe('書き出し', () => {
     const writes = world.writes
     await clock.advance(10_000)
     expect(world.writes).toBe(writes)
+  })
+
+  test('セッション id の形がおかしければ書き出さない', async ($, on) => {
+    const { world, clock } = engine(on, undefined, '../../evil')
+    await start($)
+    await clock.advance(600)
+    expect(world.writes).toBe(0)
+    expect([...world.files.keys()]).toEqual([])
   })
 
   test('タブを閉じると「閉じた」と書き出し、/clear で猫がリセットされる', async ($, on) => {
@@ -662,7 +670,7 @@ describe('質問', () => {
   })
 })
 
-describe('制御文字', () => {
+describe('制御文字とセッション id', () => {
   test('cleanText は ESC・BEL・C1・DEL・双方向の上書きを取り除き、改行は残してタブは空白にする', () => {
     expect(cleanText('a\x1b]52;c;AAAA\x07b\x1b[2Jc')).toBe('a]52;c;AAAAb[2Jc')
     expect(cleanText('x\x9b31m\x85\x7fy')).toBe('x31my')
@@ -684,6 +692,17 @@ describe('制御文字', () => {
       expect(line).not.toContain('\x07')
     }
     expect(projectOf(`/work/${evil}`)).toBe(']52;c;AAAA[2J')
+  })
+
+  test('セッション id は英数字・_・- だけ。おかしければファイル名にしない', () => {
+    expect(isSessionId('0f1e2d3c-aaaa-bbbb-cccc-123456789abc')).toBe(true)
+    expect(roomFile(DIR, 'sess-a')).toBe(FILE)
+    for (const bad of ['', '../x', 'a/b', 'a.b', 'a b', 'a\x1b']) {
+      expect(isSessionId(bad)).toBe(false)
+      expect(roomFile(DIR, bad)).toBeUndefined()
+    }
+    const room = { session: '../x', project: 'p', updatedAt: 1, cats: [], links: [] }
+    expect(parseRoom(JSON.stringify(room))).toBeUndefined()
   })
 
   test('parseRoom は読み込んだ文字列の制御文字を全部取り除く', () => {

@@ -12,7 +12,12 @@ export const HEARTBEAT_MS = 60_000
 /** 書き出しをまとめる間隔 */
 export const PUBLISH_DELAY_MS = 500
 
-export const roomFile = (dir: string, session: string) => `${dir}/${session}.json`
+/** セッション id として受け付ける形。ファイル名に使うので、/ や .. を含むものは通さない */
+export const isSessionId = (session: string) => /^[\w-]+$/.test(session)
+
+/** 部屋のファイルのパス。セッション id の形がおかしければ undefined（書き出さない） */
+export const roomFile = (dir: string, session: string): string | undefined =>
+  isSessionId(session) ? `${dir}/${session}.json` : undefined
 
 export function projectOf(cwd: string): string {
   const parts = cwd.split('/').filter(Boolean)
@@ -57,7 +62,12 @@ export function parseRoom(text: string): Room | undefined {
     const value = cleanDeep(JSON.parse(text))
     if (typeof value !== 'object' || value === null) return undefined
     const room = value as Partial<Room>
-    if (typeof room.session !== 'string' || typeof room.updatedAt !== 'number' || !Array.isArray(room.cats))
+    if (
+      typeof room.session !== 'string' ||
+      !isSessionId(room.session) ||
+      typeof room.updatedAt !== 'number' ||
+      !Array.isArray(room.cats)
+    )
       return undefined
     return {
       session: room.session,

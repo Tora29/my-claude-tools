@@ -190,6 +190,9 @@ async function writeRoom($: Dollar, closing?: string) {
   if (!dir) return
   const t = await $.clock.now()
   const session = closing ?? (await $.session.id())
+  // セッション id はファイル名になるので、形がおかしければ書かない
+  const file = roomFile(dir, session)
+  if (!file) return
   const project = projectOf(await $.session.cwd())
   const room = closing
     ? snapshot(session, project, t, [], [], [], true)
@@ -197,7 +200,7 @@ async function writeRoom($: Dollar, closing?: string) {
   const key = session + contentKey(room)
   const busy = room.cats.some(cat => isActive(cat) || cat.trip)
   if (key === lastKey && !(busy && t - lastWriteAt >= HEARTBEAT_MS)) return
-  await $.fs.write(roomFile(dir, session), JSON.stringify(room))
+  await $.fs.write(file, JSON.stringify(room))
   lastKey = key
   lastWriteAt = t
 }

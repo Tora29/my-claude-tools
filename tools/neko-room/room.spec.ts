@@ -55,6 +55,13 @@ describe('loadRooms', () => {
     expect(loadRooms(join(dir, 'nothing'), T)).toEqual([])
   })
 
+  test('セッション id の形がおかしい部屋は読まない', () => {
+    put('a.json', room('a', 'alpha'))
+    put('b.json', room('../b', 'beta'))
+    put('c.json', room('c\x1b[2J', 'gamma'))
+    expect(loadRooms(dir, T).map(r => r.project)).toEqual(['alpha'])
+  })
+
   test('部屋の文字列に入った制御文字（ESC・BEL・C1・双方向の上書き）は画面に届かない', () => {
     const osc = '\x1b]52;c;AAAA\x07'
     const clear = '\x1b[2J'
