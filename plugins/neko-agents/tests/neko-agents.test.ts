@@ -16,6 +16,7 @@ import {
   resolveTarget,
   speechOf,
   startTrip,
+  summarize,
   SUMMARY_MAX,
 } from '../hooks/cats'
 import { batonsFor } from '../hooks/links'
@@ -28,7 +29,8 @@ import {
   splitAnswers,
   toQuestions,
 } from '../hooks/questions'
-import { parseRoom } from '../hooks/rooms'
+import { isSessionId, parseRoom, projectOf, roomFile } from '../hooks/rooms'
+import { cleanText } from '../hooks/text'
 import type { Cat, Room } from '../types'
 
 const DIR = '/home/test/.claude/neko-agents/rooms'
@@ -48,7 +50,7 @@ type ToolHook = (e: ToolCallInput) => ToolCallResult | Promise<ToolCallResult>
  * プラグインの下に敷くエンジン役の hook。テストの on は最初に $ を呼ぶ前に
  * 全部登録しておく必要があるので、ツールの答え方もここで受け取る
  */
-function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
+function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' }), session = 'sess-a') {
   const clock = mock.clock(on, { now: 1_000_000 })
   const world = {
     agents: [] as AgentInfo[],
@@ -63,11 +65,13 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
     files: new Map<string, { text: string; mtimeMs: number }>(),
     writes: 0,
     pruned: 0,
+    /** $.process.run に渡した argv と、そのときまでに書いたファイルの数 */
+    runs: [] as { argv: readonly string[]; writes: number }[],
   }
   mock.env(on, { HOME: '/home/test' })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
-  on('session.id', () => ({ value: 'sess-a' }))
+  on('session.id', () => ({ value: session }))
   on('session.cwd', () => ({ value: '/work/my-proj' }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -94,8 +98,9 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' })) {
     world.files.set(e.path, { text: e.text, mtimeMs: clock.now() })
     return { value: undefined }
   })
-  on('process.run', () => {
-    world.pruned++
+  on('process.run', (_$, e) => {
+    world.runs.push({ argv: e.argv, writes: world.writes })
+    if (e.argv[0] === 'find') world.pruned++
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('model.complete', (_$, e) => {
@@ -185,6 +190,33 @@ describe('書き出し', () => {
     const writes = world.writes
     await clock.advance(10_000)
     expect(world.writes).toBe(writes)
+  })
+
+  test('部屋のフォルダは 0700・ファイルは 0600 にする（シェルを通さず argv で）', async ($, on) => {
+    const { world, published } = engine(on)
+    await start($)
+    await published()
+    const argvs = world.runs.map(run => run.argv.join(' '))
+    expect(argvs).toContain(`mkdir -p -m 700 ${DIR}`)
+    expect(argvs).toContain(`chmod 700 ${DIR}`)
+    expect(argvs).toContain(`chmod 600 ${FILE}`)
+    // フォルダは最初に書く前に、ファイルは書いた後に
+    expect(world.runs.find(run => run.argv[0] === 'mkdir')?.writes).toBe(0)
+    expect(world.runs.find(run => run.argv.join(' ') === `chmod 600 ${FILE}`)?.writes).toBe(1)
+    // 2 回目からは chmod しない
+    const runs = world.runs.length
+    await spawn($, 'more', 'Explore')
+    await published()
+    expect(world.writes).toBe(2)
+    expect(world.runs.length).toBe(runs)
+  })
+
+  test('セッション id の形がおかしければ書き出さない', async ($, on) => {
+    const { world, clock } = engine(on, undefined, '../../evil')
+    await start($)
+    await clock.advance(600)
+    expect(world.writes).toBe(0)
+    expect([...world.files.keys()]).toEqual([])
   })
 
   test('タブを閉じると「閉じた」と書き出し、/clear で猫がリセットされる', async ($, on) => {
@@ -657,6 +689,57 @@ describe('質問', () => {
     await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
     expect(askOf(await published())?.explain).toBe('off')
     expect(world.summaries).toBe(0)
+  })
+})
+
+describe('制御文字とセッション id', () => {
+  test('cleanText は ESC・BEL・C1・DEL・双方向の上書きを取り除き、改行は残してタブは空白にする', () => {
+    expect(cleanText('a\x1b]52;c;AAAA\x07b\x1b[2Jc')).toBe('a]52;c;AAAAb[2Jc')
+    expect(cleanText('x\x9b31m\x85\x7fy')).toBe('x31my')
+    expect(cleanText('\u202eevil\u2066.txt\u2069')).toBe('evil.txt')
+    expect(cleanText('1\r\n2\r3\n4\t5\x006')).toBe('1\n2\n3\n4 56')
+    expect(cleanText('ねこ 🐈 ok')).toBe('ねこ 🐈 ok')
+  })
+
+  test('ツールの要約（ファイル名・コマンド・検索語）にも制御文字を残さない', () => {
+    const evil = '\x1b]52;c;AAAA\x07\x1b[2J'
+    for (const e of [
+      { tool: 'Bash', command: `ls ${evil}` },
+      { tool: 'Read', file_path: `/src/${evil}.ts` },
+      { tool: 'Grep', pattern: evil },
+      { tool: 'WebSearch', query: evil },
+    ]) {
+      const line = summarize(e)
+      expect(line).not.toContain('\x1b')
+      expect(line).not.toContain('\x07')
+    }
+    expect(projectOf(`/work/${evil}`)).toBe(']52;c;AAAA[2J')
+  })
+
+  test('セッション id は英数字・_・- だけ。おかしければファイル名にしない', () => {
+    expect(isSessionId('0f1e2d3c-aaaa-bbbb-cccc-123456789abc')).toBe(true)
+    expect(roomFile(DIR, 'sess-a')).toBe(FILE)
+    for (const bad of ['', '../x', 'a/b', 'a.b', 'a b', 'a\x1b']) {
+      expect(isSessionId(bad)).toBe(false)
+      expect(roomFile(DIR, bad)).toBeUndefined()
+    }
+    const room = { session: '../x', project: 'p', updatedAt: 1, cats: [], links: [] }
+    expect(parseRoom(JSON.stringify(room))).toBeUndefined()
+  })
+
+  test('parseRoom は読み込んだ文字列の制御文字を全部取り除く', () => {
+    const evil = '\x1b]52;c;AAAA\x07'
+    const room = {
+      session: 'sess-a',
+      project: `p${evil}`,
+      updatedAt: 1,
+      cats: [{ ...newBoss(1), name: `n${evil}`, recent: [`r${evil}`] }],
+      links: [],
+    }
+    const parsed = parseRoom(JSON.stringify(room))
+    expect(parsed?.project).toBe('p]52;c;AAAA')
+    expect(parsed?.cats[0]?.name).toBe('n]52;c;AAAA')
+    expect(parsed?.cats[0]?.recent).toEqual(['r]52;c;AAAA'])
   })
 })
 

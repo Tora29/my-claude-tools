@@ -23,5 +23,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # latest だと実行のたびに版が変わるので、手元で使っている版（@types/bun とも同じ）に固定する
+          bun-version: 1.4.2
       # bun audit は bun.lock だけを読むので bun install は要らない
       - run: bun audit

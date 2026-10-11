@@ -54,6 +54,75 @@ describe('loadRooms', () => {
   test('フォルダが無ければ空', () => {
     expect(loadRooms(join(dir, 'nothing'), T)).toEqual([])
   })
+
+  test('セッション id の形がおかしい部屋は読まない', () => {
+    put('a.json', room('a', 'alpha'))
+    put('b.json', room('../b', 'beta'))
+    put('c.json', room('c\x1b[2J', 'gamma'))
+    expect(loadRooms(dir, T).map(r => r.project)).toEqual(['alpha'])
+  })
+
+  test('部屋の文字列に入った制御文字（ESC・BEL・C1・双方向の上書き）は画面に届かない', () => {
+    const osc = '\x1b]52;c;AAAA\x07'
+    const clear = '\x1b[2J'
+    const evil = (label: string) => `${label}${osc}${clear}\x9b31m\u202e\u2066\x7f`
+    const base = room('a', evil('alpha'))
+    const [boss, kitten] = base.cats as [Cat, Cat]
+    const bad: Room = {
+      ...base,
+      cats: [
+        { ...boss, current: evil('$ ls'), say: { text: evil('ニャ'), from: T - 1000, until: T + 60_000 } },
+        {
+          ...kitten,
+          name: evil('ソラ'),
+          handle: evil('sora'),
+          description: evil('調査'),
+          current: evil('Read room.ts'),
+          recent: [evil('Grep foo'), evil('WebSearch bar')],
+          summary: evil('終わったニャ'),
+        },
+      ],
+      asks: [
+        {
+          id: 'toolu-ask',
+          catId: 'main',
+          askedAt: T,
+          questions: [
+            {
+              question: evil('どれにする？'),
+              header: evil('方式'),
+              multiSelect: false,
+              options: [{ label: evil('A'), description: evil('説明') }],
+            },
+          ],
+          status: 'open',
+          answers: {},
+          explain: 'done',
+          explanation: `### ${evil('見出し')}\n${evil('本文')}\n→ 1. ${evil('A')}: ${evil('楽')}`,
+        },
+      ],
+    }
+    put('a.json', bad)
+    const rooms = loadRooms(dir, T)
+    expect(rooms).toHaveLength(1)
+    for (const width of [30, 80]) {
+      const { lines, detail } = frame(rooms, T, width, { selected: 'a/k-a', history: true })
+      const screen = [...lines, ...detail].join('\n')
+      // 中身は残る
+      expect(screen).toContain('ソラ')
+      // ビューア自身の色付け（SGR）は残る
+      expect(screen).toContain('\x1b[1m')
+      // 色付け以外のエスケープ・制御文字は無い
+      // eslint-disable-next-line no-control-regex -- 色付け（ESC [ … m）以外の ESC が残っていないかを見る
+      const others = screen.replace(/\x1b\[[0-9;]*m/g, '')
+      expect(others).not.toContain('\x1b')
+      expect(others).not.toContain('\x07')
+      expect(others).not.toContain('\x7f')
+      expect(others).not.toContain('\x9b')
+      expect(others).not.toContain('\u202e')
+      expect(others).not.toContain('\u2066')
+    }
+  })
 })
 
 describe('wrap', () => {

@@ -91,6 +91,10 @@ const ignore = (): undefined => undefined
 // タイマーや書き出しの状態はホットリロードで消えるので、モジュール変数で持ってよい
 let timer: Timer | undefined
 let roomsDir: string | undefined
+/** 自分だけが入れるようにした部屋のフォルダ */
+let securedDir: string | undefined
+/** 自分だけが読めるようにした部屋のファイル */
+const securedFiles = new Set<string>()
 let publishTimer: Timer | undefined
 let lastKey = ''
 let lastWriteAt = 0
@@ -169,6 +173,24 @@ async function roomsDirOf($: Dollar): Promise<string | undefined> {
   return roomsDir
 }
 
+/**
+ * 部屋のファイルには作業の内容（コマンド・ファイル名・質問など）が入るので、自分だけが読めるようにする。
+ * $.fs.write には mode の指定が無いので、mkdir・chmod を argv で（シェルを通さず）動かす。
+ * フォルダを 0700 にするのが本命で、ファイルの 0600 は念のため（書いたことのないファイルだけ）
+ */
+async function secureDir($: Dollar, dir: string) {
+  if (securedDir === dir) return
+  await $.process.run(['mkdir', '-p', '-m', '700', dir])
+  const { exitCode } = await $.process.run(['chmod', '700', dir])
+  if (exitCode === 0) securedDir = dir
+}
+
+async function secureFile($: Dollar, file: string) {
+  if (securedFiles.has(file)) return
+  const { exitCode } = await $.process.run(['chmod', '600', file])
+  if (exitCode === 0) securedFiles.add(file)
+}
+
 /** 1 日以上更新のない部屋のファイルを掃除する（$.fs には消す API が無いので find で） */
 async function pruneRooms($: Dollar) {
   const dir = await roomsDirOf($)
@@ -190,6 +212,9 @@ async function writeRoom($: Dollar, closing?: string) {
   if (!dir) return
   const t = await $.clock.now()
   const session = closing ?? (await $.session.id())
+  // セッション id はファイル名になるので、形がおかしければ書かない
+  const file = roomFile(dir, session)
+  if (!file) return
   const project = projectOf(await $.session.cwd())
   const room = closing
     ? snapshot(session, project, t, [], [], [], true)
@@ -197,7 +222,10 @@ async function writeRoom($: Dollar, closing?: string) {
   const key = session + contentKey(room)
   const busy = room.cats.some(cat => isActive(cat) || cat.trip)
   if (key === lastKey && !(busy && t - lastWriteAt >= HEARTBEAT_MS)) return
-  await $.fs.write(roomFile(dir, session), JSON.stringify(room))
+  // 守れなくても書き出しは続ける（猫が見えなくなるより良い）。次の回にまた試す
+  await secureDir($, dir).catch(ignore)
+  await $.fs.write(file, JSON.stringify(room))
+  await secureFile($, file).catch(ignore)
   lastKey = key
   lastWriteAt = t
 }

@@ -59,9 +59,13 @@ export function textWidth(text: string): number {
   return width
 }
 
+/** 1 行に収める文字の改行・タブは空白にする（行が崩れないように） */
+const flat = (text: string) => text.replace(/[\t\n\v\f\r]/g, ' ')
+
 /** ちょうど width 桁にする。はみ出す分は … で切り、足りない分は空白で埋める */
-export function fit(text: string, width: number, align: 'left' | 'right' = 'left'): string {
+export function fit(raw: string, width: number, align: 'left' | 'right' = 'left'): string {
   if (width <= 0) return ''
+  const text = flat(raw)
   let out = text
   if (textWidth(text) > width) {
     out = ''
@@ -118,7 +122,7 @@ export class Canvas {
     const row = this.cells[y]
     if (!row) return
     let cx = x
-    for (const ch of text) {
+    for (const ch of flat(text)) {
       const w = charWidth(ch)
       if (cx >= this.width) break
       if (cx >= 0) {

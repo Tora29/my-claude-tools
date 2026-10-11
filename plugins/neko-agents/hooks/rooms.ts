@@ -1,6 +1,7 @@
 // ほかのタブ（セッション）とねこ部屋を共有する。$ に触らない純粋なロジック。
 import type { Ask, Cat, Link, Room } from '../types'
 import { MAIN_ID } from './cats'
+import { cleanDeep, cleanText } from './text'
 
 /** ホームディレクトリの下の、部屋のファイルを置く場所 */
 export const ROOMS_DIR = '.claude/neko-agents/rooms'
@@ -11,11 +12,16 @@ export const HEARTBEAT_MS = 60_000
 /** 書き出しをまとめる間隔 */
 export const PUBLISH_DELAY_MS = 500
 
-export const roomFile = (dir: string, session: string) => `${dir}/${session}.json`
+/** セッション id として受け付ける形。ファイル名に使うので、/ や .. を含むものは通さない */
+export const isSessionId = (session: string) => /^[\w-]+$/.test(session)
+
+/** 部屋のファイルのパス。セッション id の形がおかしければ undefined（書き出さない） */
+export const roomFile = (dir: string, session: string): string | undefined =>
+  isSessionId(session) ? `${dir}/${session}.json` : undefined
 
 export function projectOf(cwd: string): string {
   const parts = cwd.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? cwd
+  return cleanText(parts[parts.length - 1] ?? cwd)
 }
 
 /** 書き出す中身。ほかのタブから来た猫（room 付き）は含めない */
@@ -47,13 +53,21 @@ export function isLive(room: Room, t: number): boolean {
   return !room.closed && t - room.updatedAt < STALE_MS
 }
 
-/** 読み込んだファイルの中身を確かめる。壊れていたり形が違ったりしたら捨てる */
+/**
+ * 読み込んだファイルの中身を確かめる。壊れていたり形が違ったりしたら捨てる。
+ * 中の文字列は全部、ターミナルを操作できる制御文字を取り除いてから使う（ビューアに届く文字はここを必ず通る）
+ */
 export function parseRoom(text: string): Room | undefined {
   try {
-    const value: unknown = JSON.parse(text)
+    const value = cleanDeep(JSON.parse(text))
     if (typeof value !== 'object' || value === null) return undefined
     const room = value as Partial<Room>
-    if (typeof room.session !== 'string' || typeof room.updatedAt !== 'number' || !Array.isArray(room.cats))
+    if (
+      typeof room.session !== 'string' ||
+      !isSessionId(room.session) ||
+      typeof room.updatedAt !== 'number' ||
+      !Array.isArray(room.cats)
+    )
       return undefined
     return {
       session: room.session,
