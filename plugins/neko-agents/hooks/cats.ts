@@ -1,5 +1,6 @@
 // 猫の絵・名前・毛色・ツール要約・お出かけ。$ に触らない純粋なロジックだけを置く。
 import type { Cat, CatStatus, Trip, TripPhase, TripReason } from '../types'
+import { cleanText } from './text'
 
 export const MAIN_ID = 'main'
 
@@ -246,11 +247,14 @@ export function typeLabel(cat: Cat): string {
 /** ツール呼び出しの envelope（引数が展開されている） */
 export type ToolArgs = { readonly tool: string; readonly [argument: string]: unknown }
 
-export const str = (value: unknown): string | undefined =>
-  typeof value === 'string' && value.length > 0 ? value : undefined
+/** ツールの引数の文字列。ビューアの画面に出るので、制御文字を取り除いておく */
+export const str = (value: unknown): string | undefined => {
+  const text = typeof value === 'string' ? cleanText(value) : ''
+  return text.length > 0 ? text : undefined
+}
 
 export function truncate(text: string, max: number): string {
-  const line = text.replace(/\s+/g, ' ').trim()
+  const line = cleanText(text).replace(/\s+/g, ' ').trim()
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 

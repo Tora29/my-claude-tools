@@ -16,6 +16,7 @@ import {
   resolveTarget,
   speechOf,
   startTrip,
+  summarize,
   SUMMARY_MAX,
 } from '../hooks/cats'
 import { batonsFor } from '../hooks/links'
@@ -28,7 +29,8 @@ import {
   splitAnswers,
   toQuestions,
 } from '../hooks/questions'
-import { parseRoom } from '../hooks/rooms'
+import { parseRoom, projectOf } from '../hooks/rooms'
+import { cleanText } from '../hooks/text'
 import type { Cat, Room } from '../types'
 
 const DIR = '/home/test/.claude/neko-agents/rooms'
@@ -657,6 +659,46 @@ describe('質問', () => {
     await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu-ask', questions: [QUESTION] })
     expect(askOf(await published())?.explain).toBe('off')
     expect(world.summaries).toBe(0)
+  })
+})
+
+describe('制御文字', () => {
+  test('cleanText は ESC・BEL・C1・DEL・双方向の上書きを取り除き、改行は残してタブは空白にする', () => {
+    expect(cleanText('a\x1b]52;c;AAAA\x07b\x1b[2Jc')).toBe('a]52;c;AAAAb[2Jc')
+    expect(cleanText('x\x9b31m\x85\x7fy')).toBe('x31my')
+    expect(cleanText('\u202eevil\u2066.txt\u2069')).toBe('evil.txt')
+    expect(cleanText('1\r\n2\r3\n4\t5\x006')).toBe('1\n2\n3\n4 56')
+    expect(cleanText('ねこ 🐈 ok')).toBe('ねこ 🐈 ok')
+  })
+
+  test('ツールの要約（ファイル名・コマンド・検索語）にも制御文字を残さない', () => {
+    const evil = '\x1b]52;c;AAAA\x07\x1b[2J'
+    for (const e of [
+      { tool: 'Bash', command: `ls ${evil}` },
+      { tool: 'Read', file_path: `/src/${evil}.ts` },
+      { tool: 'Grep', pattern: evil },
+      { tool: 'WebSearch', query: evil },
+    ]) {
+      const line = summarize(e)
+      expect(line).not.toContain('\x1b')
+      expect(line).not.toContain('\x07')
+    }
+    expect(projectOf(`/work/${evil}`)).toBe(']52;c;AAAA[2J')
+  })
+
+  test('parseRoom は読み込んだ文字列の制御文字を全部取り除く', () => {
+    const evil = '\x1b]52;c;AAAA\x07'
+    const room = {
+      session: 'sess-a',
+      project: `p${evil}`,
+      updatedAt: 1,
+      cats: [{ ...newBoss(1), name: `n${evil}`, recent: [`r${evil}`] }],
+      links: [],
+    }
+    const parsed = parseRoom(JSON.stringify(room))
+    expect(parsed?.project).toBe('p]52;c;AAAA')
+    expect(parsed?.cats[0]?.name).toBe('n]52;c;AAAA')
+    expect(parsed?.cats[0]?.recent).toEqual(['r]52;c;AAAA'])
   })
 })
 
