@@ -65,6 +65,8 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' }), session =
     files: new Map<string, { text: string; mtimeMs: number }>(),
     writes: 0,
     pruned: 0,
+    /** $.process.run に渡した argv と、そのときまでに書いたファイルの数 */
+    runs: [] as { argv: readonly string[]; writes: number }[],
   }
   mock.env(on, { HOME: '/home/test' })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -96,8 +98,9 @@ function engine(on: On, toolCall: ToolHook = () => ({ result: 'ok' }), session =
     world.files.set(e.path, { text: e.text, mtimeMs: clock.now() })
     return { value: undefined }
   })
-  on('process.run', () => {
-    world.pruned++
+  on('process.run', (_$, e) => {
+    world.runs.push({ argv: e.argv, writes: world.writes })
+    if (e.argv[0] === 'find') world.pruned++
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('model.complete', (_$, e) => {
@@ -187,6 +190,25 @@ describe('書き出し', () => {
     const writes = world.writes
     await clock.advance(10_000)
     expect(world.writes).toBe(writes)
+  })
+
+  test('部屋のフォルダは 0700・ファイルは 0600 にする（シェルを通さず argv で）', async ($, on) => {
+    const { world, published } = engine(on)
+    await start($)
+    await published()
+    const argvs = world.runs.map(run => run.argv.join(' '))
+    expect(argvs).toContain(`mkdir -p -m 700 ${DIR}`)
+    expect(argvs).toContain(`chmod 700 ${DIR}`)
+    expect(argvs).toContain(`chmod 600 ${FILE}`)
+    // フォルダは最初に書く前に、ファイルは書いた後に
+    expect(world.runs.find(run => run.argv[0] === 'mkdir')?.writes).toBe(0)
+    expect(world.runs.find(run => run.argv.join(' ') === `chmod 600 ${FILE}`)?.writes).toBe(1)
+    // 2 回目からは chmod しない
+    const runs = world.runs.length
+    await spawn($, 'more', 'Explore')
+    await published()
+    expect(world.writes).toBe(2)
+    expect(world.runs.length).toBe(runs)
   })
 
   test('セッション id の形がおかしければ書き出さない', async ($, on) => {
